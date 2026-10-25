@@ -16,14 +16,28 @@ use streamy_core::session::stream_session::{StreamProfile, StreamSession};
 
 fn run_mock_uvox_server(port: u16, server_running: Arc<AtomicBool>, connect_count: Arc<AtomicU32>) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).expect("bind failed");
+        let listener = match TcpListener::bind(format!("127.0.0.1:{}", port)) {
+            Ok(l) => l,
+            Err(_) => {
+                let mut bound = None;
+                for _ in 0..20 {
+                    thread::sleep(Duration::from_millis(100));
+                    if let Ok(l) = TcpListener::bind(format!("127.0.0.1:{}", port)) {
+                        bound = Some(l);
+                        break;
+                    }
+                }
+                bound.expect("bind failed after retries")
+            }
+        };
         listener.set_nonblocking(true).unwrap();
 
         while server_running.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     connect_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(4)));
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
 
                     // Handle handshake
                     let send_resp = |s: &mut TcpStream, cls: u16, t: u16, p: &[u8]| {
@@ -57,6 +71,7 @@ fn run_mock_uvox_server(port: u16, server_running: Arc<AtomicBool>, connect_coun
                     if read_msg(&mut stream) { send_resp(&mut stream, 1, 0x004, b"ACK:Data transfer mode\0"); }
 
                     // Loop reading data frames until connection dropped or server stopped
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
                     while server_running.load(Ordering::SeqCst) {
                         let mut buf = [0u8; 1024];
                         match stream.read(&mut buf) {
@@ -80,7 +95,10 @@ fn run_mock_uvox_server(port: u16, server_running: Arc<AtomicBool>, connect_coun
 
 #[tokio::test]
 async fn test_automated_kill_server_backoff_restart_resume() {
-    let port = 18942;
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("get ephemeral port");
+        l.local_addr().unwrap().port()
+    };
     let server_running = Arc::new(AtomicBool::new(true));
     let connect_count = Arc::new(AtomicU32::new(0));
 
