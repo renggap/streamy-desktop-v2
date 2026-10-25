@@ -8,13 +8,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   linux-checks:
     name: Linux Tests & Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux audio and GTK/WebKit dependencies
         run: |
@@ -32,10 +33,15 @@ jobs:
         run: cargo test --workspace --verbose
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'npm'
+
+      - name: Verify Node.js version
+        run: |
+          node -v
+          npm -v
 
       - name: Install Frontend Dependencies
         run: npm ci
@@ -53,7 +59,7 @@ jobs:
     name: Windows Build & NSIS Package
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup MSVC Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -70,15 +76,23 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/build-lame-dll.ps1
+          if (-not (Test-Path "src-tauri\windows\libmp3lame.dll")) {
+            Copy-Item "target\lame-dist\libmp3lame.dll" "src-tauri\windows\libmp3lame.dll" -Force
+          }
 
       - name: Run Workspace Tests on Windows
         run: cargo test --workspace
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: 'npm'
+
+      - name: Verify Node.js version
+        run: |
+          node -v
+          npm -v
 
       - name: Install Frontend Dependencies
         run: npm ci
@@ -87,7 +101,7 @@ jobs:
         run: npm run tauri build
 
       - name: Upload NSIS Installer & LAME Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: streamy-desktop-windows-x64
           path: |

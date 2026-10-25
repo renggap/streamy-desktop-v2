@@ -38,8 +38,10 @@
       "../crates/streamy-lame/lame_notice.txt"
     ],
     "windows": {
+      "bundleVCRuntime": true,
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/hooks.nsh"
       }
     }
   }

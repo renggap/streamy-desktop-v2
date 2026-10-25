@@ -94,12 +94,13 @@ if (-not (Test-Path $FinalDll)) {
     throw "libmp3lame.dll was not found at $FinalDll after build."
 }
 
-# Distribute DLL to cargo target folders for immediate runtime availability
+# Distribute DLL to cargo target folders and NSIS windows packaging dir for immediate runtime availability
 $TargetDirs = @(
     "$PSScriptRoot\..\target\release",
     "$PSScriptRoot\..\target\debug",
     "$PSScriptRoot\..\src-tauri\target\release",
-    "$PSScriptRoot\..\src-tauri\target\debug"
+    "$PSScriptRoot\..\src-tauri\target\debug",
+    "$PSScriptRoot\..\src-tauri\windows"
 )
 
 foreach ($dir in $TargetDirs) {
