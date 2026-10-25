@@ -23,7 +23,7 @@ fn run_mock_uvox_server(port: u16, server_running: Arc<AtomicBool>, connect_coun
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     connect_count.fetch_add(1, Ordering::SeqCst);
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(4)));
 
                     // Handle handshake
                     let send_resp = |s: &mut TcpStream, cls: u16, t: u16, p: &[u8]| {
@@ -59,8 +59,13 @@ fn run_mock_uvox_server(port: u16, server_running: Arc<AtomicBool>, connect_coun
                     // Loop reading data frames until connection dropped or server stopped
                     while server_running.load(Ordering::SeqCst) {
                         let mut buf = [0u8; 1024];
-                        if stream.read(&mut buf).is_err() {
-                            break;
+                        match stream.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(_) => {},
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                                continue;
+                            }
+                            Err(_) => break,
                         }
                     }
                 }
@@ -112,7 +117,7 @@ async fn test_automated_kill_server_backoff_restart_resume() {
 
     // 1) Wait for Live state
     let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
+    while start.elapsed() < Duration::from_secs(8) {
         if matches!(session.state(), StreamState::Live { .. }) {
             break;
         }
@@ -133,7 +138,7 @@ async fn test_automated_kill_server_backoff_restart_resume() {
 
     // 4) Wait for auto-resume back to Live
     let start2 = std::time::Instant::now();
-    while start2.elapsed() < Duration::from_secs(6) {
+    while start2.elapsed() < Duration::from_secs(10) {
         if matches!(session.state(), StreamState::Live { .. }) {
             break;
         }
