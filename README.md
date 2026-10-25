@@ -47,7 +47,7 @@ streamy-desktop-v2/
 
 ### Prerequisites
 - **Rust:** Stable 1.80+ (`x86_64-pc-windows-msvc` on Windows; standard toolchain on Linux)
-- **Node.js:** v20+ / v22+
+- **Node.js:** v24+
 - **Linux dev packages:** `libasound2-dev libwebkit2gtk-4.1-dev build-essential`
 
 ### 1. Run Workspace Tests (Core + LAME + Desktop)
