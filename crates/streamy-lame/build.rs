@@ -35,6 +35,18 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/lame");
     println!("cargo:rerun-if-changed=lame.def");
 
+    let prebuilt_dist = manifest_dir.join("..").join("..").join("target").join("lame-dist");
+    if target.contains("windows")
+        && prebuilt_dist.join("mp3lame.lib").exists()
+        && prebuilt_dist.join("libmp3lame.dll").exists()
+    {
+        let _ = std::fs::copy(prebuilt_dist.join("mp3lame.lib"), out_dir.join("mp3lame.lib"));
+        let _ = std::fs::copy(prebuilt_dist.join("libmp3lame.dll"), out_dir.join("libmp3lame.dll"));
+        println!("cargo:rustc-link-search=native={}", out_dir.display());
+        println!("cargo:rustc-link-lib=dylib=mp3lame");
+        return;
+    }
+
     let mut build = cc::Build::new();
     build.include(&lib_src);
     build.include(&inc_dir);
