@@ -1,0 +1,15 @@
+[package]
+name = "streamy-lame"
+version = "2.0.0"
+edition = "2021"
+authors = ["Streamy Authors"]
+license = "LGPL-2.0-or-later"
+description = "LAME MP3 encoder FFI and safe wrapper for Streamy"
+
+[dependencies]
+thiserror = "2.0"
+
+[build-dependencies]
+cc = "1.2"
+
+[dev-dependencies]

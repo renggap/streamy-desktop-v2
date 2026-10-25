@@ -1,0 +1,35 @@
+# Build output
+target/
+dist/
+dist-ssr/
+*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri
+src-tauri/target/
+
+# Binaries & libraries produced during build
+*.so
+*.dylib
+*.dll
+*.exe
+*.lib
+*.exp
+*.pdb
+
+# Secrets and local config (AGENTS.md hard rules: never commit creds or keys)
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,253 @@
+/* Hallmark daylight broadcast console palette */
+:root {
+  --color-page: #f8fafc;        /* slate-50 */
+  --color-card: #ffffff;        /* white */
+  --color-border: #e2e8f0;      /* slate-200 */
+  --color-muted-bg: #f1f5f9;    /* slate-100 */
+  --color-text-main: #0f172a;   /* slate-900 */
+  --color-text-muted: #475569;  /* slate-600 */
+  --color-text-dim: #94a3b8;    /* slate-400 */
+
+  /* Primary action: Lime */
+  --color-primary: #65a30d;     /* lime-600 */
+  --color-primary-hover: #4d7c0f; /* lime-700 */
+  --color-primary-soft: #ecfccb;  /* lime-100 */
+  --color-primary-text: #3f6212;  /* lime-800 */
+
+  /* Semantic broadcast tally colors */
+  --color-live: #16a34a;        /* green-600 */
+  --color-live-soft: #dcfce7;   /* green-100 */
+  --color-live-text: #166534;   /* green-800 */
+
+  --color-danger: #dc2626;      /* red-600 */
+  --color-danger-hover: #b91c1c;/* red-700 */
+  --color-danger-soft: #fee2e2; /* red-100 */
+  --color-danger-text: #991b1b; /* red-800 */
+
+  --color-warn: #d97706;        /* amber-600 */
+  --color-warn-soft: #fef3c7;   /* amber-100 */
+  --color-warn-text: #92400e;   /* amber-800 */
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-page);
+  color: var(--color-text-main);
+  line-height: 1.5;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-dim);
+}
+
+/* Card components */
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Buttons */
+.btn-primary {
+  background: var(--color-primary);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: background 0.15s ease, transform 0.05s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.99);
+}
+.btn-primary:disabled {
+  background: var(--color-muted-bg);
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-hover);
+}
+.btn-danger:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.btn-secondary {
+  background: var(--color-muted-bg);
+  color: var(--color-text-main);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-primary);
+  border: 2px solid var(--color-primary);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+}
+.btn-outline.danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+.btn-outline.danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
+/* Text inputs & select */
+.input-text, .input-select {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--color-text-main);
+  background: #ffffff;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.input-text:focus, .input-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+.input-text:disabled, .input-select:disabled {
+  background: var(--color-muted-bg);
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
+}
+.badge-idle {
+  background: var(--color-muted-bg);
+  color: var(--color-text-muted);
+}
+.badge-live {
+  background: var(--color-live-soft);
+  color: var(--color-live-text);
+}
+.badge-busy {
+  background: var(--color-warn-soft);
+  color: var(--color-warn-text);
+}
+.badge-danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dot-live {
+  background: var(--color-live);
+  box-shadow: 0 0 8px var(--color-live);
+}
+.dot-idle {
+  background: var(--color-text-dim);
+}
+.dot-busy {
+  background: var(--color-warn);
+}
+.dot-danger {
+  background: var(--color-danger);
+}
+
+/* Alerts */
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.alert-warn {
+  background: var(--color-warn-soft);
+  border: 1px solid var(--color-warn);
+  color: var(--color-warn-text);
+}
+.alert-danger {
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger);
+  color: var(--color-danger-text);
+}
