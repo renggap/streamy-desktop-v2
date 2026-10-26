@@ -84,6 +84,8 @@
       console.error(e);
     }
   }
+
+  // ponytail: no toast plumbing here; folders open visibly on success, errors logged. Add prop callback if needed.
 </script>
 
 <div

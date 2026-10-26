@@ -43,6 +43,8 @@ pub struct ProfileRecord {
     #[serde(alias = "username", default)]
     pub dj_user: Option<String>,
     #[serde(default)]
+    pub dj_password: Option<String>,
+    #[serde(default)]
     pub dj_port: Option<u16>,
     #[serde(alias = "protocol", default = "default_dj_protocol")]
     pub dj_protocol: String,
@@ -87,12 +89,24 @@ impl ProfileDb {
                 admin_password TEXT,
                 mode TEXT NOT NULL DEFAULT 'SOURCE',
                 dj_user TEXT,
+                dj_password TEXT,
                 dj_port INTEGER,
                 dj_protocol TEXT NOT NULL DEFAULT 'ULTRAVOX',
                 dj_mount TEXT
             );",
             [],
         )?;
+        // Migration: dj_password added after first release
+        let has_col: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = 'dj_password'",
+                [],
+                |row| row.get(0),
+            )?;
+        if has_col == 0 {
+            self.conn.execute("ALTER TABLE profiles ADD COLUMN dj_password TEXT", [])?;
+        }
         Ok(())
     }
 
@@ -100,7 +114,7 @@ impl ProfileDb {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, host, port, sid, password, mount, codec, bitrate_kbps, \
                     sample_rate_hz, mono, admin_user, admin_password, mode, dj_user, \
-                    dj_port, dj_protocol, dj_mount \
+                    dj_password, dj_port, dj_protocol, dj_mount \
              FROM profiles ORDER BY id ASC"
         )?;
 
@@ -121,9 +135,10 @@ impl ProfileDb {
                 admin_password: row.get(12)?,
                 mode: row.get(13)?,
                 dj_user: row.get(14)?,
-                dj_port: row.get::<_, Option<u32>>(15)?.map(|p| p as u16),
-                dj_protocol: row.get(16)?,
-                dj_mount: row.get(17)?,
+                dj_password: row.get(15)?,
+                dj_port: row.get::<_, Option<u32>>(16)?.map(|p| p as u16),
+                dj_protocol: row.get(17)?,
+                dj_mount: row.get(18)?,
             })
         })?;
 
@@ -138,7 +153,7 @@ impl ProfileDb {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, host, port, sid, password, mount, codec, bitrate_kbps, \
                     sample_rate_hz, mono, admin_user, admin_password, mode, dj_user, \
-                    dj_port, dj_protocol, dj_mount \
+                    dj_password, dj_port, dj_protocol, dj_mount \
              FROM profiles WHERE id = ?1"
         )?;
 
@@ -159,9 +174,10 @@ impl ProfileDb {
                 admin_password: row.get(12)?,
                 mode: row.get(13)?,
                 dj_user: row.get(14)?,
-                dj_port: row.get::<_, Option<u32>>(15)?.map(|p| p as u16),
-                dj_protocol: row.get(16)?,
-                dj_mount: row.get(17)?,
+                dj_password: row.get(15)?,
+                dj_port: row.get::<_, Option<u32>>(16)?.map(|p| p as u16),
+                dj_protocol: row.get(17)?,
+                dj_mount: row.get(18)?,
             })
         })?;
 
@@ -176,8 +192,8 @@ impl ProfileDb {
         self.conn.execute(
             "INSERT INTO profiles (name, host, port, sid, password, mount, codec, bitrate_kbps, \
                                    sample_rate_hz, mono, admin_user, admin_password, mode, dj_user, \
-                                   dj_port, dj_protocol, dj_mount) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                                   dj_password, dj_port, dj_protocol, dj_mount) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 p.name,
                 p.host,
@@ -193,6 +209,7 @@ impl ProfileDb {
                 p.admin_password,
                 p.mode,
                 p.dj_user,
+                p.dj_password,
                 p.dj_port.map(|port| port as u32),
                 p.dj_protocol,
                 p.dj_mount,
@@ -206,8 +223,9 @@ impl ProfileDb {
             "UPDATE profiles SET name = ?1, host = ?2, port = ?3, sid = ?4, password = ?5, \
                                  mount = ?6, codec = ?7, bitrate_kbps = ?8, sample_rate_hz = ?9, \
                                  mono = ?10, admin_user = ?11, admin_password = ?12, mode = ?13, \
-                                 dj_user = ?14, dj_port = ?15, dj_protocol = ?16, dj_mount = ?17 \
-             WHERE id = ?18",
+                                 dj_user = ?14, dj_password = ?15, dj_port = ?16, dj_protocol = ?17, \
+                                 dj_mount = ?18 \
+             WHERE id = ?19",
             params![
                 p.name,
                 p.host,
@@ -223,6 +241,7 @@ impl ProfileDb {
                 p.admin_password,
                 p.mode,
                 p.dj_user,
+                p.dj_password,
                 p.dj_port.map(|port| port as u32),
                 p.dj_protocol,
                 p.dj_mount,
@@ -268,6 +287,7 @@ mod tests {
             admin_password: None,
             mode: "SOURCE".into(),
             dj_user: None,
+            dj_password: None,
             dj_port: None,
             dj_protocol: "ULTRAVOX".into(),
             dj_mount: None,

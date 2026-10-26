@@ -237,6 +237,7 @@
     }
     try {
       await api.startStream(prof.id);
+      showToast(t("toastStreamStarted"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -246,6 +247,7 @@
   async function handleStopStream() {
     try {
       await api.stopStream();
+      showToast(t("toastStreamStopped"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -255,6 +257,7 @@
   async function handleStartRecord() {
     try {
       await api.startRecording();
+      showToast(t("toastRecordStarted"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -264,6 +267,7 @@
   async function handleStopRecord() {
     try {
       await api.stopRecording();
+      showToast(t("toastRecordStopped"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -274,6 +278,7 @@
     settings.active_profile_id = id;
     try {
       await api.saveSettings(settings);
+      showToast(t("toastProfileSelected"));
     } catch (e) {
       console.error(e);
     }
@@ -289,6 +294,7 @@
       }
       showEditModal = false;
       editingProfile = null;
+      showToast(t("toastProfileSaved"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -303,6 +309,7 @@
         settings.active_profile_id = profiles.length > 0 ? profiles[0].id : null;
         await api.saveSettings(settings);
       }
+      showToast(t("toastProfileDeleted"));
     } catch (e) {
       console.error(e);
       showToast(String(e));
@@ -353,6 +360,7 @@
             onDeviceChange={async (dev) => {
               settings.mic_device = dev || null;
               await api.saveSettings(settings);
+              showToast(t("toastDeviceChanged"));
             }}
           />
         </div>
@@ -368,6 +376,7 @@
             try {
               await api.toggleStreamRecording(enabled);
               await api.saveSettings(settings);
+              showToast(t(enabled ? "toastRecWithStream" : "toastRecWithStreamOff"));
             } catch (e) {
               console.error(e);
               showToast(String(e));

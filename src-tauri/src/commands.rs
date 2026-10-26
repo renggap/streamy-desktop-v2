@@ -48,6 +48,9 @@ pub fn start_stream(
 
     // Load password: check Credential Manager first, fall back to record
     let password = secrets::get_password(profile_id).unwrap_or(profile.password);
+    let dj_password = secrets::get_dj_password(profile_id)
+        .ok()
+        .or_else(|| profile.dj_password.clone().filter(|p| !p.is_empty() && p != "credential_manager"));
 
     let stream_prof = StreamProfile {
         id: profile.id,
@@ -63,6 +66,7 @@ pub fn start_stream(
         mono: profile.mono,
         mode: BroadcastMode::parse(&profile.mode),
         dj_user: profile.dj_user,
+        dj_password,
         dj_port: profile.dj_port,
         dj_protocol: DjProtocol::parse(&profile.dj_protocol),
         dj_mount: profile.dj_mount,
@@ -249,9 +253,13 @@ pub fn get_profile(state: State<AppState>, id: i64) -> Result<Option<ProfileReco
 pub fn save_profile(state: State<AppState>, profile: ProfileRecord) -> Result<i64, String> {
     let mut db_record = profile.clone();
     let raw_password = profile.password;
+    let raw_dj_password = profile.dj_password.clone().unwrap_or_default();
 
-    // Do not store cleartext password in SQLite if we can store it in Credential Manager
+    // Do not store cleartext passwords in SQLite if we can store them in Credential Manager.
+    // Sentinel passthrough on edit; blank stays blank (no DJ password set).
     db_record.password = "credential_manager".to_string();
+    let keep_dj = db_record.dj_password.as_deref() == Some("credential_manager") || !raw_dj_password.is_empty();
+    db_record.dj_password = if keep_dj { Some("credential_manager".to_string()) } else { None };
 
     let id = if profile.id == 0 {
         state
@@ -276,6 +284,17 @@ pub fn save_profile(state: State<AppState>, profile: ProfileRecord) -> Result<i6
             let mut fallback = db_record.clone();
             fallback.id = id;
             fallback.password = raw_password.clone();
+            let _ = state.db.lock().update(&fallback);
+        }
+    }
+
+    // DJ password gets its own Credential Manager slot; same sentinel rules.
+    if !raw_dj_password.is_empty() && raw_dj_password != "credential_manager" {
+        if let Err(e) = secrets::set_dj_password(id, &raw_dj_password) {
+            tracing::warn!("keyring write failed for DJ password, falling back to DB storage: {}", e);
+            let mut fallback = db_record.clone();
+            fallback.id = id;
+            fallback.dj_password = Some(raw_dj_password);
             let _ = state.db.lock().update(&fallback);
         }
     }

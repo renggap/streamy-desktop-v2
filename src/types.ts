@@ -1,7 +1,7 @@
 // Types matching the Rust backend and Streamy Desktop domain.
 
 export type DjProtocol = "SHOUTCAST" | "ICECAST";
-export type BroadcastMode = "DJ" | "AUTOMATION";
+export type BroadcastMode = "SOURCE" | "DJ";
 
 export interface Profile {
   id?: number;
@@ -21,6 +21,7 @@ export interface Profile {
   channels?: number;
   mode?: BroadcastMode | string;
   dj_user?: string | null;
+  dj_password?: string | null;
   username?: string | null;
   dj_port?: number | null;
   dj_protocol?: DjProtocol | string;

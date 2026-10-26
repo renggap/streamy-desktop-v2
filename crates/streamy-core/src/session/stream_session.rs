@@ -37,6 +37,7 @@ pub struct StreamProfile {
     pub mono: bool,
     pub mode: BroadcastMode,
     pub dj_user: Option<String>,
+    pub dj_password: Option<String>,
     pub dj_port: Option<u16>,
     pub dj_protocol: DjProtocol,
     pub dj_mount: Option<String>,
@@ -136,12 +137,18 @@ impl StreamSession {
                 profile.dj_user.clone(),
             ))
         } else {
+            // DJ mode: authenticate with the DJ credential pair
+            // (dj_user + dj_password), not the source password.
+            let dj_password = profile
+                .dj_password
+                .clone()
+                .unwrap_or_else(|| profile.password.clone());
             match profile.dj_protocol {
                 DjProtocol::ULTRAVOX => Box::new(UvoxClient::new(
                     profile.host.clone(),
                     dj_port,
                     profile.sid,
-                    profile.password.clone(),
+                    dj_password,
                     if cfg.codec == Codec::AAC { "audio/aacp".into() } else { "audio/mpeg".into() },
                     cfg.sample_rate_hz,
                     if cfg.mono { 1 } else { 2 },
@@ -152,7 +159,7 @@ impl StreamSession {
                     dj_port,
                     profile.dj_mount.clone().unwrap_or_else(|| "/".into()),
                     profile.dj_user.clone().unwrap_or_default(),
-                    profile.password.clone(),
+                    dj_password,
                     "audio/mpeg".into(),
                 )),
             }

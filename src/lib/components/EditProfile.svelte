@@ -17,13 +17,20 @@
   let port = $state(8000);
   let sid = $state(1);
   let username = $state("");
+  let djPassword = $state("");
   let mount = $state("/live");
   let password = $state("");
   let protocol = $state<DjProtocol>("SHOUTCAST");
-  let mode = $state<BroadcastMode>("DJ");
+  let mode = $state<BroadcastMode>("SOURCE");
   let bitrate = $state(128);
   let samplerate = $state(44100);
   let channels = $state(2);
+
+  const isDj = $derived(mode === "DJ");
+  const isAzura = $derived(isDj && protocol === "ICECAST");
+  function toggleAzura(checked: boolean) {
+    protocol = checked ? "ICECAST" : "SHOUTCAST";
+  }
 
   // Metadata
   let streamName = $state("");
@@ -46,10 +53,11 @@
       port = profile.port || 8000;
       sid = profile.sid || 1;
       username = profile.dj_user || profile.username || "";
+      djPassword = profile.dj_password || "";
       mount = profile.mount || profile.dj_mount || "/live";
       password = profile.password || "";
       protocol = (profile.dj_protocol || profile.protocol || "SHOUTCAST") as DjProtocol;
-      mode = (profile.mode || "DJ") as BroadcastMode;
+      mode = (profile.mode === "DJ" ? "DJ" : "SOURCE") as BroadcastMode;
       bitrate = profile.bitrate_kbps || profile.bitrate || 128;
       samplerate = profile.sample_rate_hz || profile.samplerate || 44100;
       channels = profile.mono ? 1 : (profile.channels || 2);
@@ -94,8 +102,9 @@
       sample_rate_hz: samplerate,
       mono: channels === 1,
       password: password || undefined,
-      dj_user: username.trim() || undefined,
-      dj_protocol: protocol,
+      dj_user: isDj ? username.trim() || undefined : undefined,
+      dj_password: isDj ? djPassword || undefined : undefined,
+      dj_protocol: isDj ? protocol : "SHOUTCAST",
       stream_name: streamName.trim() || undefined,
       stream_genre: streamGenre.trim() || undefined,
       stream_desc: streamDesc.trim() || undefined,
@@ -142,17 +151,10 @@
             <input id="prof-name" type="text" class="input-text" required bind:value={name} />
           </div>
           <div class="form-group flex-1">
-            <label for="prof-proto">{t("fieldProtocol")}</label>
-            <select id="prof-proto" class="input-select" bind:value={protocol}>
-              <option value="SHOUTCAST">{t("protocolShoutcast")}</option>
-              <option value="ICECAST">{t("protocolIcecast")}</option>
-            </select>
-          </div>
-          <div class="form-group flex-1">
             <label for="prof-mode">{t("fieldMode")}</label>
             <select id="prof-mode" class="input-select" bind:value={mode}>
+              <option value="SOURCE">{t("modeSource")}</option>
               <option value="DJ">{t("modeDj")}</option>
-              <option value="AUTOMATION">{t("modeAutomation")}</option>
             </select>
           </div>
         </div>
@@ -166,24 +168,40 @@
             <label for="prof-port">{t("fieldPort")} *</label>
             <input id="prof-port" type="number" min="1" max="65535" class="input-text" required bind:value={port} />
           </div>
-          {#if protocol === "SHOUTCAST"}
-            <div class="form-group flex-1">
-              <label for="prof-sid">{t("fieldSid")}</label>
-              <input id="prof-sid" type="number" min="1" class="input-text" placeholder="1" bind:value={sid} />
-            </div>
-          {:else}
+          {#if isAzura}
             <div class="form-group flex-1">
               <label for="prof-mount">{t("fieldMount")}</label>
               <input id="prof-mount" type="text" class="input-text" placeholder="/live" bind:value={mount} />
             </div>
+          {:else}
+            <div class="form-group flex-1">
+              <label for="prof-sid">{t("fieldSid")}</label>
+              <input id="prof-sid" type="number" min="1" class="input-text" placeholder="1" bind:value={sid} />
+            </div>
           {/if}
         </div>
 
-        <div class="form-row">
-          <div class="form-group flex-1">
-            <label for="prof-username">{t("fieldUsername")}</label>
-            <input id="prof-username" type="text" class="input-text" placeholder="e.g. source / djlogin" bind:value={username} />
+        {#if isDj}
+          <div class="form-row">
+            <label class="azura-check">
+              <input type="checkbox" checked={isAzura} onchange={(e) => toggleAzura(e.currentTarget.checked)} />
+              {t("azuracastServer")}
+            </label>
           </div>
+
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="prof-username">{t("fieldDjUser")}</label>
+              <input id="prof-username" type="text" class="input-text" placeholder="e.g. djlogin" bind:value={username} />
+            </div>
+            <div class="form-group flex-1">
+              <label for="prof-djpassword">{t("fieldDjPassword")}</label>
+              <input id="prof-djpassword" type="password" class="input-text" placeholder={isEditing ? "(Unchanged if blank)" : "DJ password"} bind:value={djPassword} />
+            </div>
+          </div>
+        {/if}
+
+        <div class="form-row">
           <div class="form-group flex-1">
             <label for="prof-password">{t("fieldPassword")}</label>
             <input id="prof-password" type="password" class="input-text" placeholder={isEditing ? "(Unchanged if blank)" : "Server password"} bind:value={password} />
@@ -194,7 +212,7 @@
       <!-- Audio Encoding -->
       <div class="form-section">
         <BitrateChooser
-          {protocol}
+          protocol={isAzura ? "ICECAST" : "SHOUTCAST"}
           {bitrate}
           {samplerate}
           {channels}
@@ -325,6 +343,22 @@
 
   .flex-1 { flex: 1; }
   .flex-2 { flex: 2; }
+
+  .azura-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-main);
+    cursor: pointer;
+  }
+
+  .azura-check input {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+  }
 
   label {
     font-size: 11px;

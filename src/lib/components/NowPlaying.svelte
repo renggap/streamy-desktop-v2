@@ -11,7 +11,7 @@
     isSending = true;
     try {
       await api.updateNowPlaying(trackTitle.trim());
-      statusMsg = t("nowPlayingSent");
+      statusMsg = t("toastNowPlayingSent");
       setTimeout(() => {
         statusMsg = null;
       }, 3000);
