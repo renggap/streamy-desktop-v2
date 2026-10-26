@@ -174,14 +174,24 @@ pub fn stop_recording(state: State<AppState>) {
 }
 
 #[tauri::command]
-pub fn toggle_stream_recording(state: State<AppState>) -> Result<bool, String> {
-    if state.stream_session.is_recording() {
-        state.stream_session.disarm_recording();
+pub fn toggle_stream_recording(
+    state: State<AppState>,
+    enabled: Option<bool>,
+) -> Result<bool, String> {
+    // Frontend sends explicit 'enabled'; fall back to toggle for older callers.
+    let want_on = enabled.unwrap_or(!state.stream_session.is_recording());
+    if !want_on {
+        if state.stream_session.is_recording() {
+            state.stream_session.disarm_recording();
+        }
         if let Some(ref handle) = *state.app_handle.lock() {
             let _ = handle.emit(EVENT_STREAM_RECORDING, false);
         }
         Ok(false)
     } else {
+        if state.stream_session.is_recording() {
+            return Ok(true); // already armed: idempotent
+        }
         let settings = state.prefs.lock().load();
         let target_dir = settings
             .recordings_folder
