@@ -35,17 +35,33 @@ impl PowerInhibitor {
     }
 
     /// Release one hold on sleep inhibition. Only the last release clears it.
+    /// `compare_exchange` loop instead of `fetch_sub` + `store(0)`: a plain store
+    /// after an underflowing sub can race a concurrent acquire and wipe real holds.
     pub fn release(&self) {
-        match self.active.fetch_sub(1, Ordering::SeqCst) {
-            0 => self.active.store(0, Ordering::SeqCst), // underflow guard
-            1 => {
-                #[cfg(windows)]
-                unsafe {
-                    use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
-                    SetThreadExecutionState(ES_CONTINUOUS);
-                }
+        let mut cur = self.active.load(Ordering::SeqCst);
+        loop {
+            if cur == 0 {
+                return; // nothing held: ignore extra release
             }
-            _ => {}
+            let next = cur - 1;
+            match self
+                .active
+                .compare_exchange(cur, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => {
+                    if next == 0 {
+                        #[cfg(windows)]
+                        unsafe {
+                            use windows_sys::Win32::System::Power::{
+                                SetThreadExecutionState, ES_CONTINUOUS,
+                            };
+                            SetThreadExecutionState(ES_CONTINUOUS);
+                        }
+                    }
+                    return;
+                }
+                Err(actual) => cur = actual,
+            }
         }
     }
 }
