@@ -3,7 +3,6 @@
   import { api } from "../api";
 
   let trackTitle = $state("");
-  let artistName = $state("");
   let isSending = $state(false);
   let statusMsg = $state<string | null>(null);
 
@@ -11,16 +10,17 @@
     if (!trackTitle.trim()) return;
     isSending = true;
     try {
-      await api.updateNowPlaying(trackTitle.trim(), artistName.trim() || undefined);
+      await api.updateNowPlaying(trackTitle.trim());
       statusMsg = t("nowPlayingSent");
       setTimeout(() => {
         statusMsg = null;
-      }, 2500);
+      }, 3000);
     } catch (e) {
       console.error(e);
       statusMsg = String(e);
     } finally {
       isSending = false;
+      // Title sticks on the row after update button pressed!
     }
   }
 
@@ -36,9 +36,7 @@
   <div class="card-title-row">
     <div class="title-with-icon">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 18V5l12-2v13"/>
-        <circle cx="6" cy="18" r="3"/>
-        <circle cx="18" cy="16" r="3"/>
+        <path d="M12 2v20M17 5v14M7 8v8M2 11v2M22 11v2"/>
       </svg>
       <h3 class="card-title">{t("nowPlayingTitle")}</h3>
     </div>
@@ -47,9 +45,9 @@
     {/if}
   </div>
 
-  <div class="inputs-row">
-    <div class="input-col flex-2">
-      <label for="track-title" class="input-label">{t("nowPlayingTrack")}</label>
+  <div class="single-row-entry">
+    <div class="input-wrap">
+      <label for="track-title" class="sr-only">{t("nowPlayingTrack")}</label>
       <input
         id="track-title"
         type="text"
@@ -60,32 +58,16 @@
       />
     </div>
 
-    <div class="input-col flex-2">
-      <label for="artist-name" class="input-label">{t("nowPlayingArtist")}</label>
-      <input
-        id="artist-name"
-        type="text"
-        class="text-input"
-        placeholder={t("nowPlayingPlaceholderArtist")}
-        bind:value={artistName}
-        onkeydown={handleKeydown}
-      />
-    </div>
-
-    <div class="input-col flex-btn">
-      <span class="input-label" aria-hidden="true">&nbsp;</span>
-      <button
-        class="btn-send"
-        disabled={!trackTitle.trim() || isSending}
-        onclick={handleSend}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="22" y1="2" x2="11" y2="13"/>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-        </svg>
-        <span>{t("nowPlayingSend")}</span>
-      </button>
-    </div>
+    <button
+      class="btn-send"
+      disabled={!trackTitle.trim() || isSending}
+      onclick={handleSend}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+      </svg>
+      <span>{t("nowPlayingSend")}</span>
+    </button>
   </div>
 </div>
 
@@ -121,74 +103,68 @@
     border-radius: 9999px;
   }
 
-  .inputs-row {
+  .single-row-entry {
     display: flex;
     gap: 10px;
-    align-items: flex-end;
+    align-items: center;
   }
 
-  .input-col {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .flex-2 {
-    flex: 2;
-  }
-
-  .flex-btn {
+  .input-wrap {
     flex: 1;
-    min-width: 120px;
+    display: flex;
   }
 
-  .input-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .text-input {
-    padding: 8px 12px;
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: 8px;
+    background-color: var(--color-bg-base);
     border: 1px solid var(--color-border);
-    border-radius: 6px;
-    font-size: 13px;
     color: var(--color-text-main);
-    background-color: var(--color-page);
+    font-size: 13px;
     outline: none;
-    transition: border 0.15s ease;
+    transition: border-color 0.15s ease;
   }
 
   .text-input:focus {
     border-color: var(--color-primary);
-    background-color: white;
   }
 
   .btn-send {
-    padding: 8px 14px;
-    background-color: var(--color-page);
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--color-text-main);
-    cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: all 0.15s ease;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: var(--color-primary);
+    color: #ffffff;
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+    white-space: nowrap;
   }
 
   .btn-send:hover:not(:disabled) {
-    background-color: var(--color-primary-soft);
-    color: var(--color-primary-text);
-    border-color: var(--color-primary);
+    opacity: 0.9;
   }
 
   .btn-send:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
   }
 </style>

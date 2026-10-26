@@ -82,7 +82,7 @@
         <span class="clip-tag">{t("clippingWarn")}</span>
       {/if}
       <span class="db-readout font-mono">
-        {displayRms > -85 ? `${displayRms.toFixed(1)} dB` : "-inf"}
+        {displayRms != null && !isNaN(displayRms) && displayRms > -85 ? `${displayRms.toFixed(1)} dB` : "-inf"}
       </span>
     </div>
   </div>

@@ -3,7 +3,7 @@ import type { TranslationKey } from "./en";
 export const id: Record<TranslationKey, string> = {
   // App Header
   appName: "Streamy Desktop",
-  appSubtitle: "Studio Siaran & Rekaman",
+  appSubtitle: "Studio Siaran Radio Dakwah & Kajian Islam",
   statusIdle: "Siap",
   statusConnecting: "Menghubungkan...",
   statusStreaming: "Mengudara",
@@ -24,13 +24,13 @@ export const id: Record<TranslationKey, string> = {
   backpressureWarn: "Lag jaringan: {pct}% tekanan balik",
 
   // Now Playing
-  nowPlayingTitle: "Sedang Diputar",
-  nowPlayingTrack: "Judul Lagu",
-  nowPlayingArtist: "Nama Artis",
-  nowPlayingSend: "Perbarui Judul",
-  nowPlayingSent: "Judul Diperbarui!",
-  nowPlayingPlaceholderTrack: "cth. Bohemian Rhapsody",
-  nowPlayingPlaceholderArtist: "cth. Queen",
+  nowPlayingTitle: "Sedang Mengudara / Diputar",
+  nowPlayingTrack: "Judul Siaran / Kajian",
+  nowPlayingArtist: "Pemateri / Qari",
+  nowPlayingSend: "Update Judul",
+  nowPlayingSent: "Judul Berhasil Diperbarui!",
+  nowPlayingPlaceholderTrack: "cth. Kajian Kitab Riyadhus Shalihin - Bab Ikhlas / Murottal Juz 30",
+  nowPlayingPlaceholderArtist: "cth. Ustadz...",
 
   // VU Meter & Mic
   micControlTitle: "Mikrofon",
@@ -58,6 +58,8 @@ export const id: Record<TranslationKey, string> = {
   fieldName: "Nama Profil",
   fieldServer: "Alamat Server (IP atau Hostname)",
   fieldPort: "Port",
+  fieldSid: "Stream ID (SID)",
+  fieldUsername: "Nama Pengguna (Username)",
   fieldMount: "Mountpoint",
   fieldPassword: "Kata Sandi",
   fieldProtocol: "Protokol",
@@ -72,9 +74,9 @@ export const id: Record<TranslationKey, string> = {
   channelsStereo: "Stereo (2 knl)",
   channelsMono: "Mono (1 knl)",
   fieldIsPublic: "Daftarkan di Direktori Publik",
-  fieldStreamName: "Nama Stasiun",
-  fieldStreamGenre: "Genre",
-  fieldStreamDesc: "Deskripsi",
+  fieldStreamName: "Nama Stasiun / Radio Dakwah",
+  fieldStreamGenre: "Kategori / Genre",
+  fieldStreamDesc: "Deskripsi Siaran",
   fieldStreamUrl: "Situs Web",
   fieldStreamAim: "AIM",
   fieldStreamIcq: "ICQ",

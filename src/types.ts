@@ -6,15 +6,27 @@ export type BroadcastMode = "DJ" | "AUTOMATION";
 export interface Profile {
   id?: number;
   name: string;
-  server: string;
+  host?: string;
+  server?: string;
   port: number;
+  sid?: number;
+  password?: string;
   mount?: string | null;
-  mode: BroadcastMode;
-  protocol: DjProtocol;
-  bitrate: number;
-  samplerate: number;
-  channels: number;
-  is_public: boolean;
+  codec?: string;
+  bitrate_kbps?: number;
+  bitrate?: number;
+  sample_rate_hz?: number;
+  samplerate?: number;
+  mono?: boolean;
+  channels?: number;
+  mode?: BroadcastMode | string;
+  dj_user?: string | null;
+  username?: string | null;
+  dj_port?: number | null;
+  dj_protocol?: DjProtocol | string;
+  protocol?: DjProtocol | string;
+  dj_mount?: string | null;
+  is_public?: boolean;
   stream_name?: string | null;
   stream_genre?: string | null;
   stream_desc?: string | null;
@@ -23,7 +35,6 @@ export interface Profile {
   stream_icq?: string | null;
   stream_irc?: string | null;
   has_password?: boolean;
-  password?: string;
 }
 
 export type StreamStatus = "idle" | "connecting" | "streaming" | "reconnecting" | "teardown";

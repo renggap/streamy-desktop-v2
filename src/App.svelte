@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { t, getLanguage, setLanguage, subscribeLanguage } from "./i18n";
   import { api } from "./lib/api";
-  import type { AppSettings, Profile, RecordState, StreamState } from "./types";
+  import type { AppSettings, Profile, RecordState, RecordStatus, StreamState, StreamStatus } from "./types";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   import Masthead from "./lib/components/Masthead.svelte";
@@ -72,6 +72,104 @@
     }, 4000);
   }
 
+  let streamTimer: any = null;
+  let recordTimer: any = null;
+
+  function updateStreamState(raw: any) {
+    if (!raw) return;
+    const type = raw.type || (typeof raw.status === "string" ? raw.status : "Idle");
+    let status: StreamStatus = "idle";
+    let dropped = streamState.dropped_frames;
+    let attempt = 0;
+    let error: string | null = null;
+
+    if (type === "Live" || type === "streaming") {
+      status = "streaming";
+      if (raw.payload && typeof raw.payload.dropped_frames === "number") {
+        dropped = raw.payload.dropped_frames;
+      }
+    } else if (type === "Connecting" || type === "connecting") {
+      status = "connecting";
+    } else if (type === "Reconnecting" || type === "reconnecting") {
+      status = "reconnecting";
+      attempt = raw.payload?.attempt ?? (raw.reconnect_attempt || 1);
+    } else if (type === "Error" || type === "error") {
+      status = "idle";
+      error = typeof raw.payload?.reason === "string" ? raw.payload.reason : (raw.last_error || "Stream error");
+    } else {
+      status = "idle";
+    }
+
+    const isNowStreaming = status === "streaming";
+    const wasStreaming = streamState.status === "streaming";
+    const activeBitrate = activeProfile?.bitrate_kbps || activeProfile?.bitrate || 128;
+
+    streamState = {
+      ...streamState,
+      status,
+      reconnect_attempt: attempt,
+      dropped_frames: dropped,
+      last_error: error,
+      profile_name: activeProfile?.name ?? streamState.profile_name,
+      current_bitrate_kbps: isNowStreaming ? activeBitrate : 0,
+    };
+
+    if (isNowStreaming && !wasStreaming) {
+      streamState.duration_secs = 0;
+      streamState.bytes_sent = 0;
+      if (streamTimer) clearInterval(streamTimer);
+      streamTimer = setInterval(() => {
+        streamState.duration_secs = (streamState.duration_secs || 0) + 1;
+        streamState.bytes_sent = (streamState.bytes_sent || 0) + Math.round((activeBitrate * 1000) / 8);
+      }, 1000);
+    } else if (!isNowStreaming && wasStreaming) {
+      if (streamTimer) clearInterval(streamTimer);
+      streamTimer = null;
+    }
+  }
+
+  function updateRecordState(raw: any) {
+    if (!raw) return;
+    const type = raw.type || (typeof raw.status === "string" ? raw.status : "Idle");
+    let status: RecordStatus = "idle";
+    let outPath: string | null = null;
+    let error: string | null = null;
+
+    if (type === "Recording" || type === "recording") {
+      status = "recording";
+      outPath = raw.payload?.path ?? raw.output_path ?? null;
+    } else if (type === "Error" || type === "error") {
+      status = "error";
+      error = typeof raw.payload?.reason === "string" ? raw.payload.reason : (raw.last_error || "Recording error");
+    } else {
+      status = "idle";
+    }
+
+    const isNowRecording = status === "recording";
+    const wasRecording = recordState.status === "recording";
+
+    recordState = {
+      ...recordState,
+      status,
+      output_path: outPath,
+      last_error: error,
+    };
+
+    if (isNowRecording && !wasRecording) {
+      recordState.duration_secs = 0;
+      recordState.bytes_written = 0;
+      if (recordTimer) clearInterval(recordTimer);
+      recordTimer = setInterval(() => {
+        recordState.duration_secs = (recordState.duration_secs || 0) + 1;
+        const kbps = activeProfile?.bitrate_kbps || activeProfile?.bitrate || 128;
+        recordState.bytes_written = (recordState.bytes_written || 0) + Math.round((kbps * 1000) / 8);
+      }, 1000);
+    } else if (!isNowRecording && wasRecording) {
+      if (recordTimer) clearInterval(recordTimer);
+      recordTimer = null;
+    }
+  }
+
   onMount(async () => {
     unsubscribeLang = subscribeLanguage(() => {
       langTick += 1;
@@ -92,23 +190,25 @@
     }
 
     try {
-      streamState = await api.getStreamState();
-      recordState = await api.getRecordState();
+      const initStream = await api.getStreamState();
+      updateStreamState(initStream);
+      const initRecord = await api.getRecordState();
+      updateRecordState(initRecord);
     } catch (e) {
       console.warn("Failed to load session states:", e);
     }
 
     try {
       unlistenStream = await api.onStreamState((state) => {
-        streamState = state;
-        if (state.last_error) {
-          showToast(state.last_error);
+        updateStreamState(state);
+        if (state && (state as any).last_error) {
+          showToast((state as any).last_error);
         }
       });
       unlistenRecord = await api.onRecordState((state) => {
-        recordState = state;
-        if (state.last_error) {
-          showToast(state.last_error);
+        updateRecordState(state);
+        if (state && (state as any).last_error) {
+          showToast((state as any).last_error);
         }
       });
     } catch (e) {
@@ -121,6 +221,8 @@
     if (unlistenRecord) unlistenRecord();
     if (unsubscribeLang) unsubscribeLang();
     if (toastTimer) clearTimeout(toastTimer);
+    if (streamTimer) clearInterval(streamTimer);
+    if (recordTimer) clearInterval(recordTimer);
   });
 
   const activeProfile = $derived(

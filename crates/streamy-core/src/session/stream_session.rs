@@ -133,7 +133,7 @@ impl StreamSession {
                 if cfg.codec == Codec::AAC { "audio/aacp".into() } else { "audio/mpeg".into() },
                 cfg.sample_rate_hz,
                 if cfg.mono { 1 } else { 2 },
-                None,
+                profile.dj_user.clone(),
             ))
         } else {
             match profile.dj_protocol {

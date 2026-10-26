@@ -21,7 +21,10 @@
 
   const isRecording = $derived(recordState.status === "recording");
 
-  function formatDuration(totalSeconds: number): string {
+  function formatDuration(totalSeconds: number | null | undefined): string {
+    if (totalSeconds == null || isNaN(totalSeconds) || totalSeconds <= 0) {
+      return "--";
+    }
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
     const s = totalSeconds % 60;
@@ -32,7 +35,10 @@
     return `${pad(m)}:${pad(s)}`;
   }
 
-  function formatBytes(bytes: number): string {
+  function formatBytes(bytes: number | null | undefined): string {
+    if (bytes == null || isNaN(bytes) || bytes <= 0) {
+      return "--";
+    }
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;

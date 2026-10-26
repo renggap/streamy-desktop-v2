@@ -80,9 +80,9 @@
               {/if}
             </div>
             <div class="meta-row">
-              <span class="meta-badge proto-badge">{p.protocol}</span>
-              <span class="meta-badge bitrate-badge">{p.bitrate} kbps</span>
-              <span class="server-endpoint font-mono">{p.server}:{p.port}{p.mount ? p.mount : ""}</span>
+              <span class="meta-badge proto-badge">{p.dj_protocol || p.protocol || "SHOUTcast"}</span>
+              <span class="meta-badge bitrate-badge">{p.bitrate_kbps || p.bitrate || 128} kbps</span>
+              <span class="server-endpoint font-mono">{p.host || p.server}:{p.port}{p.mount ? p.mount : ""}</span>
             </div>
           </div>
 

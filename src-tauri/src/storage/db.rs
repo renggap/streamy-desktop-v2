@@ -5,25 +5,48 @@ use std::path::Path;
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 
+fn default_sid() -> u32 { 1 }
+fn default_codec() -> String { "MP3".to_string() }
+fn default_bitrate() -> u32 { 128 }
+fn default_sample_rate() -> u32 { 44100 }
+fn default_mode() -> String { "DJ".to_string() }
+fn default_dj_protocol() -> String { "SHOUTCAST".to_string() }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileRecord {
+    #[serde(default)]
     pub id: i64,
     pub name: String,
+    #[serde(alias = "server")]
     pub host: String,
     pub port: u16,
+    #[serde(default = "default_sid")]
     pub sid: u32,
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
     pub mount: String,
+    #[serde(default = "default_codec")]
     pub codec: String,
+    #[serde(alias = "bitrate", default = "default_bitrate")]
     pub bitrate_kbps: u32,
+    #[serde(alias = "samplerate", default = "default_sample_rate")]
     pub sample_rate_hz: u32,
+    #[serde(default)]
     pub mono: bool,
+    #[serde(default)]
     pub admin_user: Option<String>,
+    #[serde(default)]
     pub admin_password: Option<String>,
+    #[serde(default = "default_mode")]
     pub mode: String,
+    #[serde(alias = "username", default)]
     pub dj_user: Option<String>,
+    #[serde(default)]
     pub dj_port: Option<u16>,
+    #[serde(alias = "protocol", default = "default_dj_protocol")]
     pub dj_protocol: String,
+    #[serde(default)]
     pub dj_mount: Option<String>,
 }
 

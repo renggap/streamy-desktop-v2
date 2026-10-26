@@ -15,6 +15,8 @@
   let name = $state("");
   let server = $state("");
   let port = $state(8000);
+  let sid = $state(1);
+  let username = $state("");
   let mount = $state("/live");
   let password = $state("");
   let protocol = $state<DjProtocol>("SHOUTCAST");
@@ -22,7 +24,6 @@
   let bitrate = $state(128);
   let samplerate = $state(44100);
   let channels = $state(2);
-  let isPublic = $state(true);
 
   // Metadata
   let streamName = $state("");
@@ -36,21 +37,22 @@
   let isSubmitting = $state(false);
   let errorMessage = $state<string | null>(null);
 
-  const isEditing = $derived(profile !== null && profile.id !== undefined);
+  const isEditing = $derived(profile !== null && profile.id !== undefined && profile.id !== 0);
 
   onMount(() => {
     if (profile) {
       name = profile.name || "";
-      server = profile.server || "";
+      server = profile.host || profile.server || "";
       port = profile.port || 8000;
-      mount = profile.mount || "/live";
+      sid = profile.sid || 1;
+      username = profile.dj_user || profile.username || "";
+      mount = profile.mount || profile.dj_mount || "/live";
       password = profile.password || "";
-      protocol = profile.protocol || "SHOUTCAST";
-      mode = profile.mode || "DJ";
-      bitrate = profile.bitrate || 128;
-      samplerate = profile.samplerate || 44100;
-      channels = profile.channels || 2;
-      isPublic = profile.is_public ?? true;
+      protocol = (profile.dj_protocol || profile.protocol || "SHOUTCAST") as DjProtocol;
+      mode = (profile.mode || "DJ") as BroadcastMode;
+      bitrate = profile.bitrate_kbps || profile.bitrate || 128;
+      samplerate = profile.sample_rate_hz || profile.samplerate || 44100;
+      channels = profile.mono ? 1 : (profile.channels || 2);
       streamName = profile.stream_name || "";
       streamGenre = profile.stream_genre || "";
       streamDesc = profile.stream_desc || "";
@@ -79,25 +81,31 @@
     errorMessage = null;
 
     const payload: Profile = {
-      id: profile?.id,
+      id: profile?.id ?? 0,
       name: name.trim(),
+      host: server.trim(),
       server: server.trim(),
       port: Number(port),
-      mount: mount.trim() || undefined,
+      sid: Number(sid) || 1,
+      mount: mount.trim() || "/live",
+      dj_mount: mount.trim() || "/live",
       mode,
-      protocol,
+      codec: "MP3",
+      bitrate_kbps: bitrate,
       bitrate,
+      sample_rate_hz: samplerate,
       samplerate,
+      mono: channels === 1,
       channels,
-      is_public: isPublic,
+      password: password || undefined,
+      dj_user: username.trim() || undefined,
+      username: username.trim() || undefined,
+      dj_protocol: protocol,
+      protocol,
       stream_name: streamName.trim() || undefined,
       stream_genre: streamGenre.trim() || undefined,
       stream_desc: streamDesc.trim() || undefined,
       stream_url: streamUrl.trim() || undefined,
-      stream_aim: streamAim.trim() || undefined,
-      stream_icq: streamIcq.trim() || undefined,
-      stream_irc: streamIrc.trim() || undefined,
-      password: password || undefined,
     };
 
     try {
@@ -146,6 +154,13 @@
               <option value="ICECAST">{t("protocolIcecast")}</option>
             </select>
           </div>
+          <div class="form-group flex-1">
+            <label for="prof-mode">{t("fieldMode")}</label>
+            <select id="prof-mode" class="input-select" bind:value={mode}>
+              <option value="DJ">{t("modeDj")}</option>
+              <option value="AUTOMATION">{t("modeAutomation")}</option>
+            </select>
+          </div>
         </div>
 
         <div class="form-row">
@@ -157,23 +172,27 @@
             <label for="prof-port">{t("fieldPort")} *</label>
             <input id="prof-port" type="number" min="1" max="65535" class="input-text" required bind:value={port} />
           </div>
+          {#if protocol === "SHOUTCAST"}
+            <div class="form-group flex-1">
+              <label for="prof-sid">{t("fieldSid")}</label>
+              <input id="prof-sid" type="number" min="1" class="input-text" placeholder="1" bind:value={sid} />
+            </div>
+          {:else}
+            <div class="form-group flex-1">
+              <label for="prof-mount">{t("fieldMount")}</label>
+              <input id="prof-mount" type="text" class="input-text" placeholder="/live" bind:value={mount} />
+            </div>
+          {/if}
         </div>
 
         <div class="form-row">
-          <div class="form-group flex-2">
-            <label for="prof-mount">{t("fieldMount")}</label>
-            <input id="prof-mount" type="text" class="input-text" placeholder="/stream" bind:value={mount} />
-          </div>
-          <div class="form-group flex-2">
-            <label for="prof-password">{t("fieldPassword")}</label>
-            <input id="prof-password" type="password" class="input-text" placeholder={isEditing ? "(Unchanged if blank)" : "Server password"} bind:value={password} />
+          <div class="form-group flex-1">
+            <label for="prof-username">{t("fieldUsername")}</label>
+            <input id="prof-username" type="text" class="input-text" placeholder="e.g. source / djlogin" bind:value={username} />
           </div>
           <div class="form-group flex-1">
-            <label for="prof-mode">{t("fieldMode")}</label>
-            <select id="prof-mode" class="input-select" bind:value={mode}>
-              <option value="DJ">{t("modeDj")}</option>
-              <option value="AUTOMATION">{t("modeAutomation")}</option>
-            </select>
+            <label for="prof-password">{t("fieldPassword")}</label>
+            <input id="prof-password" type="password" class="input-text" placeholder={isEditing ? "(Unchanged if blank)" : "Server password"} bind:value={password} />
           </div>
         </div>
       </div>
@@ -193,47 +212,27 @@
         />
       </div>
 
-      <!-- Public Directory & Metadata -->
+      <!-- Station Metadata (Islamic Broadcast Theme) -->
       <div class="form-section">
-        <label class="checkbox-label">
-          <input type="checkbox" bind:checked={isPublic} />
-          <span>{t("fieldIsPublic")}</span>
-        </label>
-
         <div class="form-row">
           <div class="form-group flex-1">
             <label for="prof-sname">{t("fieldStreamName")}</label>
-            <input id="prof-sname" type="text" class="input-text" placeholder="My Awesome Station" bind:value={streamName} />
+            <input id="prof-sname" type="text" class="input-text" placeholder="cth. Radio Dakwah Islamiah / Suara Al-Qur'an" bind:value={streamName} />
           </div>
           <div class="form-group flex-1">
             <label for="prof-genre">{t("fieldStreamGenre")}</label>
-            <input id="prof-genre" type="text" class="input-text" placeholder="Rock / Pop / Indie" bind:value={streamGenre} />
+            <input id="prof-genre" type="text" class="input-text" placeholder="Kajian Islam / Murottal / Ceramah" bind:value={streamGenre} />
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group flex-2">
             <label for="prof-desc">{t("fieldStreamDesc")}</label>
-            <input id="prof-desc" type="text" class="input-text" placeholder="Broadcasting live from the studio" bind:value={streamDesc} />
+            <input id="prof-desc" type="text" class="input-text" placeholder="Siaran dakwah dan kajian Islam ilmiah" bind:value={streamDesc} />
           </div>
           <div class="form-group flex-2">
             <label for="prof-url">{t("fieldStreamUrl")}</label>
-            <input id="prof-url" type="text" class="input-text" placeholder="https://myradio.com" bind:value={streamUrl} />
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group flex-1">
-            <label for="prof-irc">{t("fieldStreamIrc")}</label>
-            <input id="prof-irc" type="text" class="input-text" placeholder="#streamy" bind:value={streamIrc} />
-          </div>
-          <div class="form-group flex-1">
-            <label for="prof-aim">{t("fieldStreamAim")}</label>
-            <input id="prof-aim" type="text" class="input-text" bind:value={streamAim} />
-          </div>
-          <div class="form-group flex-1">
-            <label for="prof-icq">{t("fieldStreamIcq")}</label>
-            <input id="prof-icq" type="text" class="input-text" bind:value={streamIcq} />
+            <input id="prof-url" type="text" class="input-text" placeholder="https://radiodakwah.com" bind:value={streamUrl} />
           </div>
         </div>
       </div>
@@ -355,19 +354,6 @@
     background-color: white;
   }
 
-  .checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    text-transform: none;
-    font-size: 13px;
-    color: var(--color-text-main);
-  }
-
-  .checkbox-label input {
-    accent-color: var(--color-primary);
-  }
 
   .modal-footer {
     display: flex;

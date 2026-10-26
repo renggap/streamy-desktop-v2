@@ -7,8 +7,8 @@ export const api = {
   getStreamState: (): Promise<StreamState> => invoke("get_stream_state"),
   startStream: (profileId: number): Promise<void> => invoke("start_stream", { profileId }),
   stopStream: (): Promise<void> => invoke("stop_stream"),
-  updateNowPlaying: (title: string, artist?: string): Promise<void> =>
-    invoke("update_now_playing", { title, artist: artist || null }),
+  updateNowPlaying: (title: string): Promise<void> =>
+    invoke("update_now_playing", { title }),
 
   // Recording
   getRecordState: (): Promise<RecordState> => invoke("get_record_state"),

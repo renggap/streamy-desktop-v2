@@ -1,7 +1,7 @@
 export const en = {
   // App Header
   appName: "Streamy Desktop",
-  appSubtitle: "Broadcast & Record Studio",
+  appSubtitle: "Islamic Broadcast & Recording Studio",
   statusIdle: "Ready",
   statusConnecting: "Connecting...",
   statusStreaming: "On Air",
@@ -22,13 +22,13 @@ export const en = {
   backpressureWarn: "Network lag: {pct}% backpressure",
 
   // Now Playing
-  nowPlayingTitle: "Now Playing",
-  nowPlayingTrack: "Track Title",
-  nowPlayingArtist: "Artist Name",
+  nowPlayingTitle: "Now Broadcasting",
+  nowPlayingTrack: "Broadcast Title / Topic",
+  nowPlayingArtist: "Speaker / Reciter",
   nowPlayingSend: "Update Title",
-  nowPlayingSent: "Title Updated!",
-  nowPlayingPlaceholderTrack: "e.g. Bohemian Rhapsody",
-  nowPlayingPlaceholderArtist: "e.g. Queen",
+  nowPlayingSent: "Title Updated Successfully!",
+  nowPlayingPlaceholderTrack: "e.g. Quran Recitation - Surah Al-Kahf / Islamic Lecture",
+  nowPlayingPlaceholderArtist: "e.g. Sheikh Mishary Rashid / Ustadz...",
 
   // VU Meter & Mic
   micControlTitle: "Microphone",
@@ -56,6 +56,8 @@ export const en = {
   fieldName: "Profile Name",
   fieldServer: "Server Address (IP or Hostname)",
   fieldPort: "Port",
+  fieldSid: "Stream ID (SID)",
+  fieldUsername: "Username",
   fieldMount: "Mountpoint",
   fieldPassword: "Password",
   fieldProtocol: "Protocol",
@@ -70,9 +72,9 @@ export const en = {
   channelsStereo: "Stereo (2 ch)",
   channelsMono: "Mono (1 ch)",
   fieldIsPublic: "List on Public Directory",
-  fieldStreamName: "Station Name",
-  fieldStreamGenre: "Genre",
-  fieldStreamDesc: "Description",
+  fieldStreamName: "Station / Radio Name",
+  fieldStreamGenre: "Category / Genre",
+  fieldStreamDesc: "Broadcast Description",
   fieldStreamUrl: "Website URL",
   fieldStreamAim: "AIM",
   fieldStreamIcq: "ICQ",
