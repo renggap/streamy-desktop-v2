@@ -87,8 +87,16 @@ impl RecordSession {
             })?;
         let display_path = output_path.to_string_lossy().to_string();
 
-        let encoder = Mp3Encoder::new(cfg.sample_rate_hz, cfg.bitrate_kbps, cfg.mono)
-            .map_err(|e| format!("Failed to create LAME encoder: {:?}", e))?;
+        let encoder = match Mp3Encoder::new(cfg.sample_rate_hz, cfg.bitrate_kbps, cfg.mono) {
+            Ok(e) => e,
+            Err(e) => {
+                // Encoder init failed: drop the file handle and remove the empty
+                // orphan so a retry with the same name can succeed.
+                drop(file);
+                let _ = std::fs::remove_file(&output_path);
+                return Err(format!("Failed to create LAME encoder: {:?}", e));
+            }
+        };
 
         let sink: Box<dyn StreamSink> = Box::new(Mp3DirectSink::new(file));
 
@@ -112,7 +120,13 @@ impl RecordSession {
             None,
         );
 
-        pipeline.start()?;
+        if let Err(e) = pipeline.start() {
+            // Capture start failed (mic denied etc.): pipeline.stop flushes/closes the
+            // sink; remove the empty file it leaves behind so a retry can reuse the name.
+            pipeline.stop();
+            let _ = std::fs::remove_file(&output_path);
+            return Err(e);
+        }
         *self.pipeline.lock() = Some(pipeline);
         *self.recording_path.lock() = Some(display_path.clone());
 

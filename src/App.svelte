@@ -365,8 +365,13 @@
           recordWithStream={settings.record_with_stream}
           onToggleRecordWithStream={async (enabled) => {
             settings.record_with_stream = enabled;
-            await api.toggleStreamRecording(enabled);
-            await api.saveSettings(settings);
+            try {
+              await api.toggleStreamRecording(enabled);
+              await api.saveSettings(settings);
+            } catch (e) {
+              console.error(e);
+              showToast(String(e));
+            }
           }}
           onStartRecord={handleStartRecord}
           onStopRecord={handleStopRecord}
