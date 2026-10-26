@@ -88,14 +88,6 @@ pub fn f32_to_i16(input: &[f32]) -> Vec<i16> {
         .collect()
 }
 
-/// Convert i16 PCM to f32 PCM [-1.0, 1.0].
-pub fn i16_to_f32(input: &[i16]) -> Vec<f32> {
-    input
-        .iter()
-        .map(|&s| s as f32 / 32768.0)
-        .collect()
-}
-
 /// Convert mono i16 PCM to stereo i16 PCM by duplicating channels.
 pub fn mono_to_stereo_i16(mono: &[i16]) -> Vec<i16> {
     let mut out = Vec::with_capacity(mono.len() * 2);
@@ -128,10 +120,6 @@ mod tests {
         assert_eq!(i[1], 0);
         assert_eq!(i[2], 16383);
         assert_eq!(i[3], 32767);
-
-        let roundtrip = i16_to_f32(&i);
-        assert!((roundtrip[0] - (-1.0)).abs() < 0.001);
-        assert!((roundtrip[2] - 0.5).abs() < 0.001);
     }
 
     #[test]

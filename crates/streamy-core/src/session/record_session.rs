@@ -52,10 +52,9 @@ impl RecordSession {
         }
     }
 
-    /// Generate standard filename: `streamy-<yyyyMMdd-HHmmss>-<ms>.mp3`.
+    /// Generate standard filename: `streamy-<yyyyMMdd-HHmmss-sss>.mp3`.
     pub fn generate_filename() -> String {
-        let now = chrono_or_system_time();
-        format!("streamy-{}.mp3", now)
+        format!("streamy-{}.mp3", timestamp_part())
     }
 
     pub fn start(
@@ -133,17 +132,61 @@ impl RecordSession {
     }
 }
 
-fn chrono_or_system_time() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now();
-    let duration = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-    let millis = duration.subsec_millis();
+/// UTC timestamp `yyyyMMdd-HHmmss-sss` from the system clock. Stdlib only, no chrono.
+fn timestamp_part() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let (y, m, dd) = civil_from_days((d.as_secs() / 86_400) as i64);
+    let s = d.as_secs() % 86_400;
+    format!(
+        "{:04}{:02}{:02}-{:02}{:02}{:02}-{:03}",
+        y, m, dd,
+        s / 3600,
+        (s % 3600) / 60,
+        s % 60,
+        d.subsec_millis()
+    )
+}
 
-    // Standard timestamp representation (seconds and millis)
-    let s = secs % 86400;
-    let hours = s / 3600;
-    let minutes = (s % 3600) / 60;
-    let seconds = s % 60;
-    format!("{:02}{:02}{:02}-{:03}", hours, minutes, seconds, millis)
+/// Days since 1970-01-01 to (year, month, day). Howard Hinnant's civil_from_days.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn civil_from_days_matches_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(364), (1970, 12, 31));
+        assert_eq!(civil_from_days(365), (1971, 1, 1));
+        // Leap-year boundaries (day numbers verified against Python date).
+        assert_eq!(civil_from_days(10_956), (1999, 12, 31));
+        assert_eq!(civil_from_days(11_017), (2000, 3, 1)); // 2000 IS a leap year
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
+    }
+
+    #[test]
+    fn generated_filename_has_date_and_correct_shape() {
+        let a = RecordSession::generate_filename();
+        // streamy-yyyyMMdd-HHmmss-sss.mp3 = 8 + 19 + 4
+        assert_eq!(a.len(), 31);
+        assert!(a.starts_with("streamy-20"));
+        // Uniqueness across calls is only guaranteed to the millisecond; same-ms
+        // calls are legal and the date prefix still prevents day-scale collisions.
+    }
 }

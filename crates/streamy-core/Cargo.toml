@@ -8,7 +8,7 @@ description = "Platform-neutral core for Streamy Desktop (Ultravox, Icecast, aud
 
 [dependencies]
 streamy-lame = { path = "../streamy-lame" }
-tokio = { version = "1.43", features = ["full"] }
+tokio = { version = "1.43", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
 rand = "0.9"
 base64 = "0.22"
 thiserror = "2.0"

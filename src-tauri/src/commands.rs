@@ -254,9 +254,16 @@ pub fn save_profile(state: State<AppState>, profile: ProfileRecord) -> Result<i6
         profile.id
     };
 
-    // Store in Windows Credential Manager
+    // Store in Windows Credential Manager. On keyring failure, keep the password
+    // in the DB record so the profile still works, and surface a warning.
     if !raw_password.is_empty() && raw_password != "credential_manager" {
-        let _ = secrets::set_password(id, &raw_password);
+        if let Err(e) = secrets::set_password(id, &raw_password) {
+            tracing::warn!("keyring write failed, falling back to DB storage: {}", e);
+            let mut fallback = db_record.clone();
+            fallback.id = id;
+            fallback.password = raw_password.clone();
+            let _ = state.db.lock().update(&fallback);
+        }
     }
 
     Ok(id)
@@ -274,13 +281,19 @@ pub fn delete_profile(state: State<AppState>, id: i64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn clear_all_profiles(state: State<AppState>) -> Result<(), String> {
-    let db = state.db.lock();
-    if let Ok(profiles) = db.list() {
-        for p in profiles {
-            let _ = secrets::delete_password(p.id);
+    let ids = {
+        let db = state.db.lock();
+        db.list().map(|profiles| profiles.into_iter().map(|p| p.id).collect::<Vec<_>>())
+    };
+    if let Ok(ids) = ids {
+        for id in ids {
+            let _ = secrets::delete_password(id);
         }
     }
-    db.clear()
+    state
+        .db
+        .lock()
+        .clear()
         .map_err(|e| format!("Failed to clear profiles: {:?}", e))
 }
 

@@ -1,41 +1,53 @@
 //! Power management and sleep inhibitor.
 //! Windows equivalent of Android WakeLock + WifiLock:
 //! SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) while broadcasting or recording.
+//! Refcounted: stream and record sessions can hold it independently.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct PowerInhibitor {
-    active: AtomicBool,
+    active: AtomicUsize,
 }
 
 impl PowerInhibitor {
     pub const fn new() -> Self {
         Self {
-            active: AtomicBool::new(false),
+            active: AtomicUsize::new(0),
         }
     }
 
     /// Inhibit system sleep while broadcasting or recording.
     pub fn acquire(&self) {
-        if self.active.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        #[cfg(windows)]
-        unsafe {
-            use windows_sys::Win32::System::Power::{
-                SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
-            };
-            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        if self.active.fetch_add(1, Ordering::SeqCst) == 0 {
+            #[cfg(windows)]
+            unsafe {
+                use windows_sys::Win32::System::Power::{
+                    SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+                };
+                SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+            }
         }
     }
 
-    /// Release sleep inhibition on teardown.
+    /// Release one hold on sleep inhibition. Only the last release clears it.
     pub fn release(&self) {
-        if !self.active.swap(false, Ordering::SeqCst) {
-            return;
+        match self.active.fetch_sub(1, Ordering::SeqCst) {
+            0 => self.active.store(0, Ordering::SeqCst), // underflow guard
+            1 => {
+                #[cfg(windows)]
+                unsafe {
+                    use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
+                    SetThreadExecutionState(ES_CONTINUOUS);
+                }
+            }
+            _ => {}
         }
+    }
+}
 
+impl Drop for PowerInhibitor {
+    fn drop(&mut self) {
+        self.active.store(0, Ordering::SeqCst);
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
@@ -44,8 +56,28 @@ impl PowerInhibitor {
     }
 }
 
-impl Drop for PowerInhibitor {
-    fn drop(&mut self) {
-        self.release();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_acquire_release_keeps_inhibitor_held() {
+        let p = PowerInhibitor::new();
+        p.acquire(); // stream
+        p.acquire(); // record
+        p.release(); // stop record -> still held
+        assert_eq!(p.active.load(Ordering::SeqCst), 1);
+        p.release(); // stop stream -> released
+        assert_eq!(p.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn extra_release_does_not_underflow() {
+        let p = PowerInhibitor::new();
+        p.release();
+        p.release();
+        assert_eq!(p.active.load(Ordering::SeqCst), 0);
+        p.acquire();
+        assert_eq!(p.active.load(Ordering::SeqCst), 1);
     }
 }

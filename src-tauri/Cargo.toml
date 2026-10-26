@@ -20,7 +20,8 @@ tauri-plugin-single-instance = "2.2"
 tauri-plugin-autostart = "2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.43", features = ["full"] }
+# tokio only as streamy-core's runtime host; tauri brings its own async.
+tokio = { version = "1.43", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 cpal = "0.15"
 rubato = "0.16"

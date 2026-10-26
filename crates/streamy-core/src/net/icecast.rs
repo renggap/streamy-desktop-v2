@@ -12,8 +12,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use parking_lot::Mutex;
 
-use crate::core::wire_safety::{header_value, parse_http_status, strip_control_chars, MAX_HEADER_VALUE, MAX_TITLE};
-use crate::net::client::{SourceClient, SourceClientError};
+use crate::core::wire_safety::{header_value, parse_http_status, strip_control_chars, truncate, MAX_HEADER_VALUE, MAX_TITLE};
+use crate::net::client::{connect_any, SourceClient, SourceClientError};
 
 const HANDSHAKE_TIMEOUT_MS: u64 = 6_000;
 const METAINT: usize = 8_192;
@@ -124,10 +124,7 @@ impl SourceClient for IcecastSourceClient {
             return Err(SourceClientError::Protocol("Address resolution failed".into()));
         }
 
-        let mut s = TcpStream::connect_timeout(
-            &addrs[0],
-            Duration::from_millis(HANDSHAKE_TIMEOUT_MS),
-        )?;
+        let mut s = connect_any(&addrs)?;
         s.set_nodelay(true)?;
         s.set_read_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
         s.set_write_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
@@ -199,11 +196,7 @@ impl SourceClient for IcecastSourceClient {
 
     fn update_now_playing(&mut self, title: &str) -> Result<(), SourceClientError> {
         let safe = strip_control_chars(title);
-        let safe_capped = if safe.len() > MAX_TITLE {
-            safe[..MAX_TITLE].to_string()
-        } else {
-            safe
-        };
+        let safe_capped = truncate(&safe, MAX_TITLE);
 
         {
             let mut t = self.meta_state.title.lock();
@@ -274,5 +267,16 @@ mod tests {
     fn test_url_encode() {
         assert_eq!(url_encode("Hello World"), "Hello%20World");
         assert_eq!(url_encode("/stream"), "%2Fstream");
+    }
+
+    #[test]
+    fn update_now_playing_long_emoji_title_does_not_panic() {
+        let mut c = IcecastSourceClient::new(
+            "h".into(), 1, "/m".into(), "".into(), "p".into(), "audio/mpeg".into(),
+        );
+        // update_now_playing mutates meta_state and spawns the admin thread; the
+        // truncation path is the part pinned against a byte-slice panic.
+        let title: String = "\u{1F3A4}".repeat(400);
+        assert!(c.update_now_playing(&title).is_ok());
     }
 }

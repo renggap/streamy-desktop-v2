@@ -1,7 +1,10 @@
 //! Rolling log appender and credential redaction.
 //! Logs to `%APPDATA%\com.streamy.desktop\logs\` with passwords/auth tokens stripped.
 
+use std::io::Write;
 use std::path::PathBuf;
+use tracing_appender::non_blocking::NonBlocking;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -38,6 +41,38 @@ pub fn redact_credentials(msg: &str) -> String {
     out
 }
 
+/// MakeWriter that redacts every event before it reaches the file appender.
+#[derive(Clone)]
+struct RedactingMakeWriter {
+    inner: NonBlocking,
+}
+
+impl<'a> MakeWriter<'a> for RedactingMakeWriter {
+    type Writer = RedactingWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+struct RedactingWriter {
+    inner: NonBlocking,
+}
+
+impl Write for RedactingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let redacted = redact_credentials(&String::from_utf8_lossy(buf));
+        self.inner.write_all(redacted.as_bytes())?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 pub fn init_logging(log_dir: PathBuf) -> Result<(), String> {
     let _ = std::fs::create_dir_all(&log_dir);
 
@@ -48,7 +83,9 @@ pub fn init_logging(log_dir: PathBuf) -> Result<(), String> {
         .unwrap_or_else(|_| EnvFilter::new("info,streamy_core=debug,streamy_desktop=debug"));
 
     let file_layer = fmt::layer()
-        .with_writer(non_blocking)
+        .with_writer(RedactingMakeWriter {
+            inner: non_blocking,
+        })
         .with_ansi(false);
 
     let stdout_layer = fmt::layer()

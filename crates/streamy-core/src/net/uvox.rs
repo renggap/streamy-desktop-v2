@@ -9,9 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::core::framing::{adts_header, message};
-use crate::core::wire_safety::{header_value, strip_control_chars, MAX_HEADER_VALUE};
+use crate::core::wire_safety::{header_value, strip_control_chars, truncate, MAX_HEADER_VALUE};
 use crate::core::xtea::encipher;
-use crate::net::client::{SourceClient, SourceClientError};
+use crate::net::client::{connect_any, SourceClient, SourceClientError};
 
 const HANDSHAKE_TIMEOUT_MS: u64 = 6_000;
 const CLOSE_JOIN_MS: u64 = 500;
@@ -128,10 +128,7 @@ impl SourceClient for UvoxClient {
             return Err(SourceClientError::Protocol("Address resolution failed".into()));
         }
 
-        let mut s = TcpStream::connect_timeout(
-            &addrs[0],
-            Duration::from_millis(HANDSHAKE_TIMEOUT_MS),
-        )?;
+        let mut s = connect_any(&addrs)?;
         s.set_nodelay(true)?;
         s.set_read_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
         s.set_write_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
@@ -247,11 +244,7 @@ impl SourceClient for UvoxClient {
         };
 
         let safe = strip_control_chars(title);
-        let safe_capped = if safe.len() > MAX_HEADER_VALUE {
-            &safe[..MAX_HEADER_VALUE]
-        } else {
-            &safe
-        };
+        let safe_capped = truncate(&safe, MAX_HEADER_VALUE);
         let xml_esc = safe_capped
             .replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -304,5 +297,21 @@ impl SourceClient for UvoxClient {
 impl Drop for UvoxClient {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_now_playing_long_emoji_title_does_not_panic() {
+        let mut c = UvoxClient::new(
+            "h".into(), 1, 1, "p".into(), "audio/mpeg".into(), 44100, 2, None,
+        );
+        // Not connected: update_now_playing returns Ok early, but this pins the
+        // truncation path against a non-char-boundary byte slice panic.
+        let title: String = "\u{1F3A4}".repeat(400); // 1600 UTF-16 units, 4 bytes each
+        assert!(c.update_now_playing(&title).is_ok());
     }
 }

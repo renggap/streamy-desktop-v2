@@ -103,8 +103,13 @@ impl StreamTransport {
                 };
                 on_state(current_state);
 
-                // Run connect()
-                let conn_res = connect();
+                // Run connect() off the async executor: it does blocking DNS + TCP + handshake.
+                let conn_res = {
+                    let connect = connect.clone();
+                    tokio::task::spawn_blocking(move || connect())
+                        .await
+                        .unwrap_or_else(|e| Err(SourceClientError::Protocol(format!("connect task failed: {e}"))))
+                };
 
                 if stopped.load(Ordering::SeqCst) {
                     break;

@@ -1,6 +1,24 @@
 //! Common SourceClient interface and errors.
 
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 use thiserror::Error;
+
+pub const HANDSHAKE_TIMEOUT_MS: u64 = 6_000;
+
+/// Try each resolved address (dual-stack hosts may only answer on one) until one connects.
+pub fn connect_any(addrs: &[SocketAddr]) -> Result<TcpStream, SourceClientError> {
+    let mut last_err = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(addr, Duration::from_millis(HANDSHAKE_TIMEOUT_MS)) {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(SourceClientError::Io(e)),
+        }
+    }
+    Err(last_err.unwrap_or(SourceClientError::Protocol(
+        "no addresses to connect".into(),
+    )))
+}
 
 #[derive(Error, Debug)]
 pub enum SourceClientError {
