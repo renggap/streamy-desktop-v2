@@ -16,6 +16,11 @@ impl PowerInhibitor {
         }
     }
 
+    /// Current hold count (0 = sleep allowed). Test/monitoring hook.
+    pub fn active_count(&self) -> usize {
+        self.active.load(Ordering::SeqCst)
+    }
+
     /// Inhibit system sleep while broadcasting or recording.
     pub fn acquire(&self) {
         if self.active.fetch_add(1, Ordering::SeqCst) == 0 {

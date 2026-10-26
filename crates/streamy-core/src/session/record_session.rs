@@ -73,8 +73,18 @@ impl RecordSession {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let file = File::create(&output_path)
-            .map_err(|e| format!("Failed to create recording file: {:?}", e))?;
+        // Refuse to clobber an existing file (clock rollback, same-ms restart):
+        // create-new leaves any prior recording untouched.
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)
+            .map_err(|e| {
+                format!(
+                    "Recording file already exists or cannot be created ({:?}): {:?}",
+                    output_path, e
+                )
+            })?;
         let display_path = output_path.to_string_lossy().to_string();
 
         let encoder = Mp3Encoder::new(cfg.sample_rate_hz, cfg.bitrate_kbps, cfg.mono)

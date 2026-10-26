@@ -290,7 +290,12 @@ impl StreamSession {
     }
 
     pub fn arm_recording(&self, path: String) -> Result<(), String> {
-        let file = File::create(&path).map_err(|e| format!("Failed to create recording file: {:?}", e))?;
+        // Refuse to clobber an existing recording (same guard as RecordSession).
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| format!("Recording file already exists or cannot be created ({path:?}): {e:?}"))?;
         let sink = Box::new(Mp3DirectSink::new(file));
 
         if let Some(ref p) = *self.pipeline.lock() {

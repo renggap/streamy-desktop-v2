@@ -217,8 +217,12 @@ async fn test_standalone_recorder_produces_valid_mp3() {
         obs_clone.lock().push(st);
     }));
 
+    // create_new guard: recorder must refuse an existing file, so remove the
+    // NamedTempFile placeholder first and reuse its reserved unique path.
     let tmp_file = NamedTempFile::new().unwrap();
     let tmp_path = tmp_file.path().to_path_buf();
+    drop(tmp_file);
+    let _ = std::fs::remove_file(&tmp_path);
 
     let config = AudioConfig {
         codec: Codec::MP3,
