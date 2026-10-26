@@ -116,7 +116,10 @@ impl AudioPipeline {
             if raw_pcm.len() < MIN_USEFUL_SAMPLES {
                 consecutive_short_reads += 1;
                 if consecutive_short_reads > SHORT_READ_LIMIT {
-                    on_mic_busy();
+                    // Never tear down from the audio thread: stop() pauses the
+                    // CPAL stream, which joins this very callback. Deadlock.
+                    let cb = on_mic_busy.clone();
+                    std::thread::spawn(move || cb());
                     return false;
                 }
             } else {

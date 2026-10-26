@@ -14,6 +14,7 @@ use crate::core::xtea::encipher;
 use crate::net::client::{connect_any, SourceClient, SourceClientError};
 
 const HANDSHAKE_TIMEOUT_MS: u64 = 6_000;
+const SEND_TIMEOUT_MS: u64 = 10_000;
 const CLOSE_JOIN_MS: u64 = 500;
 const ICY_PUB: &str = "1";
 
@@ -215,9 +216,11 @@ impl SourceClient for UvoxClient {
             )));
         }
 
-        // Streaming: writes own the socket; no read timeout
+        // Streaming: reads stay unblocked (server can be silent for long
+        // stretches), but bound writes so a stalled server cannot pin the
+        // client mutex forever - that would deadlock stop_and_shutdown.
         s.set_read_timeout(None)?;
-        s.set_write_timeout(None)?;
+        s.set_write_timeout(Some(Duration::from_millis(SEND_TIMEOUT_MS)))?;
 
         self.stream = Some(s);
         Ok(())

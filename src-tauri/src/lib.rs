@@ -20,6 +20,36 @@ use streamy_core::session::record_session::RecordSession;
 use streamy_core::session::stream_session::StreamSession;
 
 pub fn run() {
+    // panic=abort + windows_subsystem=windows makes panics vanish silently.
+    // Write every panic to crash.log next to the database before abort.
+    // Direct fs write, not tracing: hook may run before init_logging, and the
+    // non_blocking buffer is lost on abort.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".into());
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "non-string panic payload".into());
+        let line = format!(
+            "[{}] PANIC at {}: {}\n",
+            chrono_free_timestamp(),
+            location,
+            payload
+        );
+        eprintln!("{line}");
+        let mut path = get_app_data_dir();
+        path.push("crash.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }));
+
     let app_dir = get_app_data_dir();
     let _ = std::fs::create_dir_all(&app_dir);
 
@@ -122,4 +152,36 @@ fn get_app_data_dir() -> PathBuf {
         }
     }
     PathBuf::from(".streamy_desktop")
+}
+
+/// Local time "YYYY-MM-DD HH:MM:SS" without a chrono dependency.
+fn chrono_free_timestamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    let rem = secs.rem_euclid(86_400);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        y, m, d,
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Howard Hinnant's civil_from_days (public domain), also used by RecordSession.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
