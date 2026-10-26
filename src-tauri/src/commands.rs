@@ -74,8 +74,6 @@ pub fn start_stream(
         stream_prof.mono,
     ));
 
-    state.power.acquire();
-
     let app_handle_opt = state.app_handle.lock().clone();
     let level_feed = app_handle_opt.map(|handle| {
         let feed: Arc<dyn Fn(streamy_core::core::level::LevelSnapshot) + Send + Sync> =
@@ -85,9 +83,13 @@ pub fn start_stream(
         feed
     });
 
-    state
-        .stream_session
-        .start(stream_prof, audio_source, level_feed)
+    let result = state.stream_session.start(stream_prof, audio_source, level_feed);
+    // Acquire only on success: a failed start (mic denied, encoder init) must not
+    // leave a permanent hold on the sleep inhibitor.
+    if result.is_ok() {
+        state.power.acquire();
+    }
+    result
 }
 
 #[tauri::command]
@@ -157,10 +159,12 @@ pub fn start_recording(
         cfg.mono,
     ));
 
-    state.power.acquire();
-    state
-        .record_session
-        .start(cfg, file_path, audio_source)
+    let result = state.record_session.start(cfg, file_path, audio_source);
+    // Same as start_stream: no hold on a failed start.
+    if result.is_ok() {
+        state.power.acquire();
+    }
+    result
 }
 
 #[tauri::command]
