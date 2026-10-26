@@ -314,3 +314,42 @@ async fn test_protocol_exception_fails_fast_without_retries() {
     let states = observed_states.lock().clone();
     assert!(matches!(states.last(), Some(TransportState::Failed { .. })));
 }
+
+/// Regression: start() is called from Tauri sync commands, which run on plain
+/// threads with no Tokio reactor. tokio::spawn there panicked with
+/// "there is no reactor running" (crash.log transport.rs:96). The worker now
+/// owns a dedicated thread + runtime, so start() must work reactor-free.
+#[test]
+fn test_start_works_outside_tokio_context() {
+    let started = Arc::new(AtomicBool::new(false));
+    let started_clone = started.clone();
+
+    let transport = Arc::new(StreamTransport::new(
+        Arc::new(move || {
+            started_clone.store(true, Ordering::SeqCst);
+            // Hold the connection "live" so the worker sits in its idle loop.
+            Ok(())
+        }),
+        Arc::new(|_| Ok(())),
+        Arc::new(|_| {}),
+        Some(Arc::new(|_| 10)),
+    ));
+
+    // Plain thread: no Tokio runtime in scope, exactly like a Tauri sync command.
+    let t = {
+        let transport = transport.clone();
+        std::thread::spawn(move || {
+            transport.start();
+        })
+    };
+    t.join().expect("start() must not panic outside Tokio");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !started.load(Ordering::SeqCst) {
+        assert!(std::time::Instant::now() < deadline, "worker never connected");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Session (Arc holder) still alive: worker must still be running.
+    transport.stop();
+}

@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Notify};
-use tokio::task::JoinHandle;
 
 use crate::core::backoff::{next_backoff_ms, should_give_up, CAPACITY};
 use crate::core::teardown_state::TransportState;
@@ -28,7 +27,6 @@ pub struct StreamTransport {
     drops: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
-    worker_handle: Arc<parking_lot::Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl StreamTransport {
@@ -56,7 +54,6 @@ impl StreamTransport {
             drops: Arc::new(AtomicU64::new(0)),
             stopped: Arc::new(AtomicBool::new(false)),
             stop_notify: Arc::new(Notify::new()),
-            worker_handle: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
@@ -93,8 +90,18 @@ impl StreamTransport {
         let backoff_fn = self.backoff_fn.clone();
         let rx_mutex = self.queue_rx.clone();
 
-        let handle = tokio::spawn(async move {
-            let mut attempt = 0;
+        // Dedicated thread + current-thread runtime: start() is called from
+        // Tauri sync commands (plain threads, no ambient Tokio context), where
+        // tokio::spawn panics with "there is no reactor running".
+        std::thread::Builder::new()
+            .name("streamy-transport".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("transport runtime");
+                rt.block_on(async move {
+                    let mut attempt = 0;
             while !stopped.load(Ordering::SeqCst) {
                 let current_state = if attempt == 0 {
                     TransportState::Connecting
@@ -199,17 +206,14 @@ impl StreamTransport {
                     }
                 }
             }
-        });
-
-        *self.worker_handle.lock() = Some(handle);
+                })
+            })
+            .expect("spawn transport thread");
     }
 
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.stop_notify.notify_waiters();
-        if let Some(h) = self.worker_handle.lock().take() {
-            h.abort();
-        }
     }
 }
 
