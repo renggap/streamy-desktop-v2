@@ -9,6 +9,7 @@ pub const FLOOR_DB: f32 = -90.0;
 pub struct LevelSnapshot {
     pub samples: Vec<f32>,
     pub rms_db: f32,
+    pub peak_db: f32,
 }
 
 pub struct LevelTap;
@@ -31,6 +32,16 @@ impl LevelTap {
         } else {
             db
         }
+    }
+
+    /// Sample peak in dBFS, floored at -90 dBFS.
+    pub fn peak_db(pcm: &[i16]) -> f32 {
+        let peak = pcm.iter().map(|&s| (s as i32).unsigned_abs()).max().unwrap_or(0);
+        if peak == 0 {
+            return FLOOR_DB;
+        }
+        let db = 20.0 * (peak as f32 / 32768.0).log10();
+        db.max(FLOOR_DB)
     }
 
     /// Point-count waveform decimation to [-1.0, 1.0] floats for the scope view.
@@ -67,6 +78,13 @@ mod tests {
         let half = vec![-16384i16; 1024];
         let db = LevelTap::rms_db(&half);
         assert!((db - (-6.02)).abs() < 0.05, "got {}", db);
+    }
+
+    #[test]
+    fn peak_db_tracks_largest_sample() {
+        assert_eq!(LevelTap::peak_db(&[0, 0, 0]), -90.0);
+        assert!(LevelTap::peak_db(&[0, -32768, 10]).abs() < 0.01);
+        assert!((LevelTap::peak_db(&[100, 16384]) + 6.02).abs() < 0.05);
     }
 
     #[test]

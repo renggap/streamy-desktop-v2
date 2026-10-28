@@ -1,79 +1,88 @@
-// Types matching the Rust backend and Streamy Desktop domain.
+// Types mirroring the Rust backend (src-tauri/src/commands.rs, storage/*, streamy-core).
+// Keep in sync: field names are the serde names.
 
-export type DjProtocol = "SHOUTCAST" | "ICECAST";
 export type BroadcastMode = "SOURCE" | "DJ";
+export type DjProtocol = "ULTRAVOX" | "ICECAST";
 
 export interface Profile {
-  id?: number;
+  id: number;
   name: string;
-  host?: string;
-  server?: string;
+  host: string;
   port: number;
-  sid?: number;
-  password?: string;
-  mount?: string | null;
-  codec?: string;
-  bitrate_kbps?: number;
-  bitrate?: number;
-  sample_rate_hz?: number;
-  samplerate?: number;
-  mono?: boolean;
-  channels?: number;
-  mode?: BroadcastMode | string;
-  dj_user?: string | null;
-  dj_password?: string | null;
-  username?: string | null;
-  dj_port?: number | null;
-  dj_protocol?: DjProtocol | string;
-  protocol?: DjProtocol | string;
-  dj_mount?: string | null;
-  is_public?: boolean;
-  stream_name?: string | null;
-  stream_genre?: string | null;
-  stream_desc?: string | null;
-  stream_url?: string | null;
-  stream_aim?: string | null;
-  stream_icq?: string | null;
-  stream_irc?: string | null;
-  has_password?: boolean;
+  sid: number;
+  /** Write-only: the backend never returns stored secrets. Blank = keep. */
+  password: string;
+  mount: string;
+  codec: string;
+  bitrate_kbps: number;
+  sample_rate_hz: number;
+  mono: boolean;
+  mode: BroadcastMode;
+  dj_user: string | null;
+  /** Write-only, like `password`. */
+  dj_password: string | null;
+  dj_port: number | null;
+  dj_protocol: DjProtocol;
+  dj_mount: string | null;
+  stream_name: string;
+  genre: string;
+  station_url: string;
+  is_public: boolean;
+  has_password: boolean;
+  has_dj_password: boolean;
 }
 
-export type StreamStatus = "idle" | "connecting" | "streaming" | "reconnecting" | "teardown";
+/** serde `#[serde(tag = "type", content = "payload")]` */
+export type StreamState =
+  | { type: "Idle" }
+  | { type: "Connecting" }
+  | { type: "Live"; payload: { dropped_frames: number } }
+  | { type: "Reconnecting"; payload: { attempt: number } }
+  | { type: "Error"; payload: { reason: string } };
 
-export interface StreamState {
-  status: StreamStatus;
-  profile_id?: number | null;
-  profile_name?: string | null;
+export type RecordState =
+  | { type: "Idle" }
+  | { type: "Recording"; payload: { path: string } }
+  | { type: "Error"; payload: { reason: string } };
+
+export interface StreamStats {
   bytes_sent: number;
-  duration_secs: number;
-  current_bitrate_kbps: number;
-  reconnect_attempt: number;
-  reconnect_delay_ms: number;
-  backpressure_pct: number;
+  live_secs: number;
+  session_secs: number;
   dropped_frames: number;
-  last_error?: string | null;
+  recording: boolean;
+  recording_path: string | null;
+  recording_bytes: number;
+  recording_secs: number;
+  now_playing: string | null;
 }
 
-export type RecordStatus = "idle" | "recording" | "error";
+export interface RecordingStatus {
+  active: boolean;
+  with_stream: boolean;
+  path: string | null;
+  secs: number;
+  bytes: number;
+  error: string | null;
+}
 
-export interface RecordState {
-  status: RecordStatus;
-  duration_secs: number;
-  bytes_written: number;
-  output_path?: string | null;
-  last_error?: string | null;
+export interface AppStatus {
+  stream: StreamState;
+  stats: StreamStats;
+  recording: RecordingStatus;
+  mic_test: boolean;
 }
 
 export interface AppSettings {
-  active_profile_id?: number | null;
-  mic_device?: string | null;
+  selected_profile_id: number | null;
   mic_gain: number;
-  recordings_folder?: string | null;
-  record_with_stream: boolean;
-  auto_reconnect: boolean;
-  start_minimized: boolean;
-  autostart: boolean;
+  input_device_name: string | null;
+  recordings_folder: string | null;
   language: "en" | "id";
+  launch_at_login: boolean;
+  start_minimized: boolean;
+  auto_reconnect: boolean;
+  record_with_stream: boolean;
 }
 
 export interface AudioDeviceDesc {
@@ -81,8 +90,14 @@ export interface AudioDeviceDesc {
   is_default: boolean;
 }
 
-export interface LevelTapEvent {
-  rms_dbfs: number;
-  peak_dbfs: number;
-  clipping: boolean;
+export interface LevelPayload {
+  rms_db: number;
+  peak_db: number;
+}
+
+export interface AppInfo {
+  version: string;
+  lame_version: string;
+  log_dir: string;
+  recordings_dir: string;
 }

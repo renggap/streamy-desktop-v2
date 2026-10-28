@@ -13,9 +13,10 @@ use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::AppState;
 use events::{EVENT_RECORD_STATE, EVENT_STREAM_STATE};
-use power::PowerInhibitor;
+use power::{Hold, PowerInhibitor};
 use storage::db::ProfileDb;
 use storage::prefs::SettingsStorage;
+use streamy_core::core::teardown_state::{RecordState, StreamState};
 use streamy_core::session::record_session::RecordSession;
 use streamy_core::session::stream_session::StreamSession;
 
@@ -57,19 +58,45 @@ pub fn run() {
     let _ = logging::init_logging(log_dir.clone());
 
     let db_path = app_dir.join("streamy.db");
-    let db = ProfileDb::open(db_path).expect("Failed to initialize SQLite database");
+    let db = match ProfileDb::open(&db_path) {
+        Ok(db) => db,
+        Err(e) => {
+            // A corrupt database must not make the app unlaunchable: keep the
+            // file for recovery and start fresh.
+            tracing::error!("profile database unreadable ({e}); starting with an empty one");
+            let _ = std::fs::rename(&db_path, db_path.with_extension("db.corrupt"));
+            ProfileDb::open(&db_path).expect("Failed to initialize SQLite database")
+        }
+    };
 
     let prefs_path = app_dir.join("settings.json");
     let prefs = SettingsStorage::new(prefs_path);
+
+    let initial_settings = prefs.load();
 
     let power = Arc::new(PowerInhibitor::new());
     let app_handle_holder: Arc<parking_lot::Mutex<Option<tauri::AppHandle>>> =
         Arc::new(parking_lot::Mutex::new(None));
 
-    // Stream state callback
+    // Stream state callback: keeps the sleep hold, tray tooltip and UI in step
+    // with the session, whatever caused the change (UI, tray, failure).
     let holder_stream = app_handle_holder.clone();
-    let stream_callback = Arc::new(move |state| {
+    let power_stream = power.clone();
+    let stream_callback = Arc::new(move |state: StreamState| {
+        let busy = matches!(
+            state,
+            StreamState::Connecting | StreamState::Live { .. } | StreamState::Reconnecting { .. }
+        );
+        power_stream.set(Hold::Stream, busy);
         if let Some(ref handle) = *holder_stream.lock() {
+            let tip = match &state {
+                StreamState::Idle => "Streamy Desktop",
+                StreamState::Connecting => "Streamy - connecting...",
+                StreamState::Live { .. } => "Streamy - ON AIR",
+                StreamState::Reconnecting { .. } => "Streamy - reconnecting...",
+                StreamState::Error { .. } => "Streamy - stream error",
+            };
+            tray::set_tooltip(handle, tip);
             let _ = handle.emit(EVENT_STREAM_STATE, state);
         }
     });
@@ -77,7 +104,9 @@ pub fn run() {
 
     // Record state callback
     let holder_record = app_handle_holder.clone();
-    let record_callback = Arc::new(move |state| {
+    let power_record = power.clone();
+    let record_callback = Arc::new(move |state: RecordState| {
+        power_record.set(Hold::Record, matches!(state, RecordState::Recording { .. }));
         if let Some(ref handle) = *holder_record.lock() {
             let _ = handle.emit(EVENT_RECORD_STATE, state);
         }
@@ -92,14 +121,15 @@ pub fn run() {
         record_session,
         app_handle: app_handle_holder.clone(),
         log_dir,
+        mic_test: Arc::new(parking_lot::Mutex::new(None)),
+        mic_gain: Arc::new(parking_lot::Mutex::new(1.0)),
     };
+    // Saved gain applies from the first capture, not only after the slider moves.
+    app_state.set_gain(initial_settings.mic_gain);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_main_window(app);
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -108,26 +138,52 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             *app_handle_holder.lock() = Some(app.handle().clone());
-            let _ = tray::setup_tray(app.handle());
+            if let Err(e) = tray::setup_tray(app.handle()) {
+                tracing::error!("tray setup failed: {e}");
+            }
+            if let Err(e) = commands::apply_autostart(app.handle(), initial_settings.launch_at_login) {
+                tracing::warn!("autostart sync failed: {e}");
+            }
+            // The window is created hidden (tauri.conf) so "start minimized"
+            // never flashes it on screen.
+            if !initial_settings.start_minimized {
+                tray::show_main_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Minimize to tray instead of closing: broadcast / record keeps running!
+                let app = window.app_handle();
+                let busy = app.try_state::<AppState>().is_some_and(|st| {
+                    st.stream_session.is_active()
+                        || matches!(st.record_session.state(), RecordState::Recording { .. })
+                });
+                // Broadcast / recording keeps running in the tray; when idle, close quits.
                 api.prevent_close();
-                let _ = window.hide();
+                if busy {
+                    let _ = window.hide();
+                } else if let Some(st) = app.try_state::<AppState>() {
+                    let st = st.inner().clone();
+                    let handle = app.clone();
+                    std::thread::spawn(move || {
+                        st.shutdown();
+                        handle.exit(0);
+                    });
+                } else {
+                    app.exit(0);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_stream_state,
+            commands::get_status,
             commands::start_stream,
             commands::stop_stream,
             commands::update_now_playing,
             commands::set_mic_gain,
-            commands::get_record_state,
             commands::start_recording,
             commands::stop_recording,
-            commands::toggle_stream_recording,
+            commands::start_mic_test,
+            commands::stop_mic_test,
             commands::list_input_devices,
             commands::get_settings,
             commands::save_settings,
@@ -137,11 +193,20 @@ pub fn run() {
             commands::delete_profile,
             commands::clear_all_profiles,
             commands::get_lame_notice,
+            commands::get_app_info,
             commands::open_log_folder,
             commands::open_recordings_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Last chance to close sockets and finalize recordings.
+                if let Some(st) = app.try_state::<AppState>() {
+                    st.shutdown();
+                }
+            }
+        });
 }
 
 fn get_app_data_dir() -> PathBuf {

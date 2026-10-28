@@ -5,7 +5,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+pub const MIN_GAIN: f32 = 0.0;
+pub const MAX_GAIN: f32 = 4.0;
+
+/// Single source of truth for app settings, shared verbatim with the UI.
+/// `serde(default)` lets older/partial files (and older UIs) load without
+/// wiping everything back to defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub selected_profile_id: Option<i64>,
     pub mic_gain: f32,
@@ -13,7 +20,9 @@ pub struct AppSettings {
     pub recordings_folder: Option<String>,
     pub language: String,
     pub launch_at_login: bool,
-    pub resume_on_launch: bool,
+    pub start_minimized: bool,
+    pub auto_reconnect: bool,
+    pub record_with_stream: bool,
 }
 
 impl Default for AppSettings {
@@ -25,8 +34,29 @@ impl Default for AppSettings {
             recordings_folder: None,
             language: "en".into(),
             launch_at_login: false,
-            resume_on_launch: false,
+            start_minimized: false,
+            auto_reconnect: true,
+            record_with_stream: false,
         }
+    }
+}
+
+impl AppSettings {
+    /// Clamp and tidy values coming from the UI or an edited file.
+    pub fn sanitized(mut self) -> Self {
+        if !self.mic_gain.is_finite() {
+            self.mic_gain = 1.0;
+        }
+        self.mic_gain = self.mic_gain.clamp(MIN_GAIN, MAX_GAIN);
+        self.input_device_name = self.input_device_name.filter(|s| !s.trim().is_empty());
+        self.recordings_folder = self
+            .recordings_folder
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if self.language != "en" && self.language != "id" {
+            self.language = "en".into();
+        }
+        self
     }
 }
 
@@ -46,9 +76,24 @@ impl SettingsStorage {
             return AppSettings::default();
         }
         match std::fs::read_to_string(&self.path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
+                Ok(s) => s.sanitized(),
+                Err(e) => {
+                    tracing::warn!("settings file unreadable, using defaults: {e}");
+                    AppSettings::default()
+                }
+            },
             Err(_) => AppSettings::default(),
         }
+    }
+
+    /// Load, apply `f`, save. Keeps read-modify-write in one place.
+    pub fn update(&self, f: impl FnOnce(&mut AppSettings)) -> Result<AppSettings, String> {
+        let mut s = self.load();
+        f(&mut s);
+        let s = s.sanitized();
+        self.save(&s)?;
+        Ok(s)
     }
 
     /// Atomic write: write to temp file in the same directory, then rename.
@@ -101,5 +146,29 @@ mod tests {
         assert_eq!(loaded.mic_gain, 1.45);
         assert_eq!(loaded.language, "id");
         assert_eq!(loaded.selected_profile_id, Some(42));
+    }
+
+    #[test]
+    fn partial_and_legacy_files_keep_known_values() {
+        // Legacy file: unknown key, missing new keys.
+        let s: AppSettings =
+            serde_json::from_str(r#"{"mic_gain":2.0,"resume_on_launch":true}"#).unwrap();
+        assert_eq!(s.mic_gain, 2.0);
+        assert!(s.auto_reconnect);
+        assert_eq!(s.language, "en");
+    }
+
+    #[test]
+    fn sanitize_clamps_gain_and_language() {
+        let s = AppSettings {
+            mic_gain: 99.0,
+            language: "fr".into(),
+            input_device_name: Some("  ".into()),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(s.mic_gain, MAX_GAIN);
+        assert_eq!(s.language, "en");
+        assert_eq!(s.input_device_name, None);
     }
 }
