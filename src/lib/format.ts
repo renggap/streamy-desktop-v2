@@ -40,3 +40,9 @@ export function fileName(path: string | null | undefined): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
 }
+
+/** Release tag shown to users: "2.1.0" -> "v2.1" (one dot). */
+export function versionTag(version: string): string {
+  const [major = "0", minor = "0"] = version.replace(/^v/, "").split(".");
+  return `v${major}.${minor}`;
+}

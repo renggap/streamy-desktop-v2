@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use tempfile::NamedTempFile;
 
 use streamy_core::audio::source::SineAudioSource;
-use streamy_core::core::audio_config_rules::{AudioConfig, BroadcastMode, Codec, DjProtocol};
+use streamy_core::core::audio_config_rules::{AudioConfig, AudioConfigRules, BroadcastMode, Codec, DjProtocol};
 use streamy_core::core::framing::message;
 use streamy_core::core::teardown_state::{RecordState, StreamState};
 use streamy_core::session::record_session::RecordSession;
@@ -288,7 +288,9 @@ fn arming_a_recording_while_idle_leaves_no_file() {
     let session = StreamSession::new(Arc::new(|_| {}));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("orphan.mp3");
-    assert!(session.arm_recording(path.to_string_lossy().to_string()).is_err());
+    assert!(session
+        .arm_recording(path.to_string_lossy().to_string(), AudioConfigRules::record_config(128, true))
+        .is_err());
     assert!(!path.exists());
 }
 
@@ -298,4 +300,65 @@ fn now_playing_is_queued_until_live() {
     assert_eq!(session.update_now_playing("  Morning Talk  "), Ok(false));
     assert_eq!(session.now_playing().as_deref(), Some("Morning Talk"));
     assert!(session.update_now_playing("   ").is_err());
+}
+
+/// (bitrate kbps, mono) of the first MPEG-1 Layer III frame in `data`.
+fn mp3_header(data: &[u8]) -> (u32, bool) {
+    const KBPS: [u32; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+    let i = data
+        .windows(2)
+        .position(|w| w[0] == 0xFF && w[1] & 0xFE == 0xFA)
+        .expect("no MPEG-1 Layer III frame");
+    (KBPS[(data[i + 2] >> 4) as usize], data[i + 3] >> 6 == 3)
+}
+
+#[tokio::test]
+async fn on_air_recording_uses_its_own_quality() {
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("get ephemeral port");
+        l.local_addr().unwrap().port()
+    };
+    let server_running = Arc::new(AtomicBool::new(true));
+    let handle = run_mock_uvox_server(port, server_running.clone(), Arc::new(AtomicU32::new(0)));
+    let session = StreamSession::new(Arc::new(|_| {}));
+    let profile = StreamProfile {
+        host: "127.0.0.1".to_string(),
+        port,
+        sid: 1,
+        password: "test".to_string(),
+        codec: Codec::MP3,
+        bitrate_kbps: 64,
+        sample_rate_hz: 44_100,
+        mono: true,
+        ..Default::default()
+    };
+    session
+        .start(profile, Box::new(SineAudioSource::new(44_100, true, 1024)), None)
+        .unwrap();
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(8) && !matches!(session.state(), StreamState::Live { .. }) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(matches!(session.state(), StreamState::Live { .. }));
+
+    let dir = tempfile::tempdir().unwrap();
+    let hi = dir.path().join("hi.mp3");
+    session
+        .arm_recording(hi.to_string_lossy().to_string(), AudioConfigRules::record_config(320, false))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    session.disarm_recording();
+
+    // Same quality as the broadcast: the broadcast's own frames are kept.
+    let same = dir.path().join("same.mp3");
+    session
+        .arm_recording(same.to_string_lossy().to_string(), AudioConfigRules::record_config(64, true))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    session.stop_and_shutdown(false);
+    server_running.store(false, Ordering::SeqCst);
+    let _ = handle.join();
+
+    assert_eq!(mp3_header(&std::fs::read(&hi).unwrap()), (320, false));
+    assert_eq!(mp3_header(&std::fs::read(&same).unwrap()), (64, true));
 }

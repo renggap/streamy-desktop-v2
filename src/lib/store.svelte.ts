@@ -14,6 +14,7 @@ import type {
   PlayerStatus,
   Profile,
   Track,
+  UpdateStatus,
 } from "../types";
 
 const POLL_MS = 1000;
@@ -43,6 +44,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   player_volume: 1,
   auto_advance: true,
   repeat: false,
+  noise_suppression: "off",
+  record_bitrate_kbps: 128,
+  record_mono: true,
 };
 
 const IDLE_PLAYER: PlayerStatus = {
@@ -110,6 +114,7 @@ class AppStore {
   profiles = $state<Profile[]>([]);
   devices = $state<AudioDeviceDesc[]>([]);
   info = $state<AppInfo | null>(null);
+  update = $state<UpdateStatus>({ state: "idle" });
   level = $state({ rms: SILENCE_DB, peak: SILENCE_DB });
   /** Which action is in flight, to disable buttons and show spinners. */
   pending = $state<null | "start" | "stop" | "record" | "mictest">(null);
@@ -167,6 +172,9 @@ class AppStore {
             if (p.paths.length) void this.addPaths(p.paths);
           }
         }),
+        await api.onUpdate((u) => {
+          this.update = u;
+        }),
         await api.onLevels((l) => {
           this.level = { rms: l.rms_db, peak: l.peak_db };
         }),
@@ -175,12 +183,14 @@ class AppStore {
       console.error("event subscription failed", e);
     }
 
-    const [settings, profiles, info, player] = await Promise.allSettled([
+    const [settings, profiles, info, player, update] = await Promise.allSettled([
       api.getSettings(),
       api.listProfiles(),
       api.getAppInfo(),
       api.getPlayer(),
+      api.getUpdateStatus(),
     ]);
+    if (update.status === "fulfilled") this.update = update.value;
     if (player.status === "fulfilled") this.#onPlayer(player.value);
     if (settings.status === "fulfilled") this.settings = settings.value;
     if (profiles.status === "fulfilled") this.profiles = profiles.value;

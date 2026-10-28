@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use streamy_core::audio::denoise::NoiseSuppression;
+use streamy_core::core::audio_config_rules::AudioConfigRules;
 
 pub const MIN_GAIN: f32 = 0.0;
 pub const MAX_GAIN: f32 = 4.0;
@@ -32,6 +34,11 @@ pub struct AppSettings {
     pub player_volume: f32,
     pub auto_advance: bool,
     pub repeat: bool,
+    /// RNNoise strength on the mic (never the playlist).
+    pub noise_suppression: NoiseSuppression,
+    /// Quality of every recording, on air or standalone (MP3, 44.1 kHz).
+    pub record_bitrate_kbps: u32,
+    pub record_mono: bool,
 }
 
 impl Default for AppSettings {
@@ -52,6 +59,9 @@ impl Default for AppSettings {
             player_volume: 1.0,
             auto_advance: true,
             repeat: false,
+            noise_suppression: NoiseSuppression::Off,
+            record_bitrate_kbps: 128,
+            record_mono: true,
         }
     }
 }
@@ -78,6 +88,7 @@ impl AppSettings {
             self.player_volume = 1.0;
         }
         self.player_volume = self.player_volume.clamp(0.0, 1.0);
+        self.record_bitrate_kbps = AudioConfigRules::record_config(self.record_bitrate_kbps, self.record_mono).bitrate_kbps;
         self
     }
 }

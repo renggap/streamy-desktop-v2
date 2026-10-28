@@ -1,6 +1,6 @@
 //! cpal WASAPI implementation of AudioSource for Windows.
-//! Accepts any common device sample format, then downmix/upmix + rubato
-//! resampling to the encoder's format via `CaptureConverter`.
+//! Accepts any common device sample format, then noise suppression and
+//! downmix/upmix + rubato resampling to the encoder's format via `MicProcessor`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -8,8 +8,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use serde::{Deserialize, Serialize};
 
-use streamy_core::audio::resample::CaptureConverter;
+use streamy_core::audio::denoise::MicProcessor;
 use streamy_core::audio::source::{AudioSource, FrameCallback};
+use streamy_core::audio::switch::InputControl;
 
 /// Frames handed to the pipeline per call (~23 ms at 44.1 kHz).
 const EMIT_FRAMES: usize = 1024;
@@ -24,16 +25,19 @@ pub struct CpalAudioSource {
     device_name: Option<String>,
     target_sample_rate: u32,
     target_mono: bool,
+    control: Arc<InputControl>,
     stream: Option<cpal::Stream>,
     running: Arc<AtomicBool>,
 }
 
 impl CpalAudioSource {
-    pub fn new(device_name: Option<String>, target_sample_rate: u32, target_mono: bool) -> Self {
+    /// `control` supplies the live noise-suppression level.
+    pub fn new(device_name: Option<String>, target_sample_rate: u32, target_mono: bool, control: Arc<InputControl>) -> Self {
         Self {
             device_name,
             target_sample_rate,
             target_mono,
+            control,
             stream: None,
             running: Arc::new(AtomicBool::new(false)),
         }
@@ -91,7 +95,7 @@ fn map_device_error(context: &str, e: impl std::fmt::Display) -> String {
 fn build_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
-    mut converter: CaptureConverter,
+    mut converter: MicProcessor,
     out_channels: usize,
     running: Arc<AtomicBool>,
     mut on_frame: FrameCallback,
@@ -149,7 +153,7 @@ impl AudioSource for CpalAudioSource {
         let in_rate = config.sample_rate.0;
         let in_channels = config.channels as usize;
         let out_channels = if self.target_mono { 1 } else { 2 };
-        let converter = CaptureConverter::new(in_rate, in_channels, self.target_sample_rate, out_channels)?;
+        let converter = MicProcessor::new(in_rate, in_channels, self.target_sample_rate, out_channels, self.control.clone())?;
 
         self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();

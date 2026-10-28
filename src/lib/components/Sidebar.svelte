@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { store } from "../store.svelte";
-  import { formatDuration } from "../format";
+  import { formatDuration, versionTag } from "../format";
   import { t } from "../../i18n/index.svelte";
   import type { Page } from "../../types";
   let { page, onnavigate }: { page: Page; onnavigate: (p: Page) => void } = $props();
@@ -11,6 +11,20 @@
     { id: "servers", icon: "server", label: () => t("navServers") },
     { id: "settings", icon: "settings", label: () => t("navSettings") },
   ];
+
+  const update = $derived.by(() => {
+    const u = store.update;
+    switch (u.state) {
+      case "downloading":
+        return t("updateDownloading", { version: versionTag(u.version), percent: u.percent == null ? "" : ` · ${u.percent}%` });
+      case "ready":
+        return t("updateReady", { version: versionTag(u.version) });
+      case "installing":
+        return t("updateInstalling", { version: versionTag(u.version) });
+      default:
+        return null;
+    }
+  });
 
   const status = $derived.by(() => {
     const s = store.status.stream;
@@ -82,6 +96,17 @@
           <span class="badge bg-red-600 text-white"><span class="pulse-dot"></span>REC</span>
         {/if}
       </div>
+    </div>
+    <div class="mt-3 flex items-center gap-2 px-1.5 text-[11px]">
+      {#if store.info}
+        <span class="font-mono text-gray-500" title={store.info.version}>{versionTag(store.info.version)}</span>
+      {/if}
+      {#if update}
+        <span class="flex min-w-0 items-center gap-1 text-lime-400" title={t("updateHint")} role="status">
+          <Icon name={store.update.state === "installing" ? "refresh" : "download"} size={12} />
+          <span class="truncate">{update}</span>
+        </span>
+      {/if}
     </div>
   </div>
 </aside>

@@ -13,6 +13,7 @@ import type {
   Profile,
   RecordState,
   StreamState,
+  UpdateStatus,
 } from "../types";
 
 // Event names: keep in sync with src-tauri/src/events.rs
@@ -22,6 +23,7 @@ const EVENT_LEVELS = "levels-changed";
 const EVENT_STREAM_RECORDING = "stream-recording-changed";
 const EVENT_PLAYER_CHANGED = "player-changed";
 const EVENT_PLAYER_ERROR = "player-error";
+const EVENT_UPDATE_CHANGED = "update-changed";
 
 export const api = {
   getStatus: (): Promise<AppStatus> => invoke("get_status"),
@@ -75,6 +77,7 @@ export const api = {
   // Misc
   getLameNotice: (): Promise<string> => invoke("get_lame_notice"),
   getAppInfo: (): Promise<AppInfo> => invoke("get_app_info"),
+  getUpdateStatus: (): Promise<UpdateStatus> => invoke("get_update_status"),
   openLogFolder: (): Promise<void> => invoke("open_log_folder"),
   openRecordingsFolder: (): Promise<void> => invoke("open_recordings_folder"),
 
@@ -89,6 +92,8 @@ export const api = {
     listen<PlayerSnapshot>(EVENT_PLAYER_CHANGED, (e) => cb(e.payload)),
   onPlayerError: (cb: (p: PlayerErrorPayload) => void): Promise<UnlistenFn> =>
     listen<PlayerErrorPayload>(EVENT_PLAYER_ERROR, (e) => cb(e.payload)),
+  onUpdate: (cb: (u: UpdateStatus) => void): Promise<UnlistenFn> =>
+    listen<UpdateStatus>(EVENT_UPDATE_CHANGED, (e) => cb(e.payload)),
   onLevels: (cb: (l: LevelPayload) => void): Promise<UnlistenFn> =>
     listen<LevelPayload>(EVENT_LEVELS, (e) => cb(e.payload)),
 };

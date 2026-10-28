@@ -1,4 +1,5 @@
 pub mod decoder;
+pub mod denoise;
 pub mod pipeline;
 pub mod player;
 pub mod resample;
@@ -7,6 +8,7 @@ pub mod source;
 pub mod switch;
 
 pub use decoder::*;
+pub use denoise::*;
 pub use pipeline::*;
 pub use player::*;
 pub use resample::*;

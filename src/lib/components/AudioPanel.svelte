@@ -4,6 +4,14 @@
   import { store } from "../store.svelte";
   import { dbToGain, formatDb, gainToDb } from "../format";
   import { t } from "../../i18n/index.svelte";
+  import type { NoiseSuppression } from "../../types";
+
+  const NOISE_LEVELS: Array<{ id: NoiseSuppression; key: "noiseOff" | "noiseLow" | "noiseMedium" | "noiseHigh" }> = [
+    { id: "off", key: "noiseOff" },
+    { id: "low", key: "noiseLow" },
+    { id: "medium", key: "noiseMedium" },
+    { id: "high", key: "noiseHigh" },
+  ];
 
   const MIN_DB = -30;
   const MAX_DB = 12;
@@ -106,6 +114,20 @@
       <Icon name={muted ? "mic-off" : "mic"} size={14} />
       {muted ? t("btnUnmute") : t("btnMute")}
     </button>
+  </div>
+
+  <div class="field">
+    <span>{t("noiseLabel")}</span>
+    <div class="segmented" role="group" aria-label={t("noiseLabel")}>
+      {#each NOISE_LEVELS as n (n.id)}
+        <button
+          type="button"
+          aria-pressed={store.settings.noise_suppression === n.id}
+          onclick={() => store.saveSettings({ noise_suppression: n.id }, true)}
+        >{t(n.key)}</button>
+      {/each}
+    </div>
+    <p class="hint">{t("noiseHint")}</p>
   </div>
 </section>
 

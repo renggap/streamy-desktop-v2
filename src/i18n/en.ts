@@ -217,6 +217,26 @@ export const en = {
   errTrackMissing: "That track is no longer in the playlist.",
   errUnsupportedFile: "This file type isn't supported or the file is damaged.",
 
+  // Noise suppression & recording quality
+  noiseLabel: "Noise suppression",
+  noiseOff: "Off",
+  noiseLow: "Low",
+  noiseMedium: "Medium",
+  noiseHigh: "High",
+  noiseHint: "Removes fan, hum and room noise from the microphone (not the playlist). Changes apply instantly, even on air.",
+  recordQualityLabel: "Recording quality",
+  recordChannelsLabel: "Recording channels",
+  channelsMono: "Mono",
+  channelsStereo: "Stereo",
+  recordQualityHint: "MP3 at 44.1 kHz, used for every recording, on air or not. A recording can't add detail the broadcast's sample rate doesn't carry.",
+  recordQualityLocked: "Quality changes apply to the next recording.",
+
+  // Updates
+  updateDownloading: "Downloading {version}{percent}",
+  updateReady: "{version} ready",
+  updateInstalling: "Updating to {version}…",
+  updateHint: "Updates install automatically when nothing is on air, recording or playing, then the app reopens.",
+
   // Errors (mapped from backend codes / messages)
   errNoProfile: "Choose or add a server first.",
   errProfileMissing: "That server no longer exists. Pick another one.",

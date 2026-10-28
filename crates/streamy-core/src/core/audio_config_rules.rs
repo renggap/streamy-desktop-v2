@@ -68,6 +68,9 @@ impl AudioConfigRules {
     pub const MP3_BITRATES: &'static [u32] = &[16, 24, 32, 48, 64, 96, 128, 192];
     pub const SAMPLE_RATES: &'static [u32] = &[16_000, 22_050, 44_100, 48_000];
     /// MP3 at 16/24 kbps needs MPEG-2 Layer III (sample rate <= 24 kHz); LAME bumps to 32 otherwise.
+    /// Recording qualities. All are MPEG-1 bitrates, valid at the fixed 44.1 kHz.
+    pub const RECORD_BITRATES: &'static [u32] = &[64, 96, 128, 192, 256, 320];
+    pub const RECORD_SAMPLE_RATE: u32 = 44_100;
     pub const MPEG2_SAMPLE_RATES: &'static [u32] = &[16_000, 22_050];
 
     /// At 16/24 kbps we want HE-AAC v1 (AAC+) and mono + low rate.
@@ -86,6 +89,16 @@ impl AudioConfigRules {
             Self::MPEG2_SAMPLE_RATES
         } else {
             Self::SAMPLE_RATES
+        }
+    }
+
+    /// Recording format for a chosen bitrate; unknown bitrates fall back to 128 kbps.
+    pub fn record_config(bitrate_kbps: u32, mono: bool) -> AudioConfig {
+        AudioConfig {
+            codec: Codec::MP3,
+            bitrate_kbps: if Self::RECORD_BITRATES.contains(&bitrate_kbps) { bitrate_kbps } else { 128 },
+            sample_rate_hz: Self::RECORD_SAMPLE_RATE,
+            mono,
         }
     }
 

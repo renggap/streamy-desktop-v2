@@ -3,6 +3,7 @@
   import { store } from "../store.svelte";
   import { fileName, formatBytes, formatDuration } from "../format";
   import { t } from "../../i18n/index.svelte";
+  import { RECORD_BITRATES } from "../../types";
 
   const rec = $derived(store.status.recording);
 </script>
@@ -61,6 +62,37 @@
     />
     <span></span>{t("recordWithStreamLabel")}
   </label>
+
+  <div class="row items-end">
+    <label class="field grow">
+      <span>{t("recordQualityLabel")}</span>
+      <select
+        class="select"
+        value={store.settings.record_bitrate_kbps}
+        onchange={(e) => store.saveSettings({ record_bitrate_kbps: Number(e.currentTarget.value) }, true)}
+        disabled={rec.active}
+      >
+        {#each RECORD_BITRATES as kbps (kbps)}
+          <option value={kbps}>{kbps} kbps</option>
+        {/each}
+      </select>
+    </label>
+    <div class="segmented" role="group" aria-label={t("recordChannelsLabel")}>
+      <button
+        type="button"
+        aria-pressed={store.settings.record_mono}
+        disabled={rec.active}
+        onclick={() => store.saveSettings({ record_mono: true }, true)}
+      >{t("channelsMono")}</button>
+      <button
+        type="button"
+        aria-pressed={!store.settings.record_mono}
+        disabled={rec.active}
+        onclick={() => store.saveSettings({ record_mono: false }, true)}
+      >{t("channelsStereo")}</button>
+    </div>
+  </div>
+  <p class="hint">{rec.active ? t("recordQualityLocked") : t("recordQualityHint")}</p>
 </section>
 
 <style>
