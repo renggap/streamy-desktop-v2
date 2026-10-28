@@ -137,7 +137,7 @@ export interface AppSettings {
 export type NoiseSuppression = "off" | "low" | "medium" | "high";
 
 /** Recording bitrates the backend accepts (MP3, 44.1 kHz). */
-export const RECORD_BITRATES = [64, 96, 128, 192, 256, 320] as const;
+export const RECORD_BITRATES = [32, 48, 64, 96, 128, 192, 256, 320] as const;
 
 export interface AudioDeviceDesc {
   name: string;

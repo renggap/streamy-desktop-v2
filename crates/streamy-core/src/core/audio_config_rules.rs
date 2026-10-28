@@ -69,7 +69,7 @@ impl AudioConfigRules {
     pub const SAMPLE_RATES: &'static [u32] = &[16_000, 22_050, 44_100, 48_000];
     /// MP3 at 16/24 kbps needs MPEG-2 Layer III (sample rate <= 24 kHz); LAME bumps to 32 otherwise.
     /// Recording qualities. All are MPEG-1 bitrates, valid at the fixed 44.1 kHz.
-    pub const RECORD_BITRATES: &'static [u32] = &[64, 96, 128, 192, 256, 320];
+    pub const RECORD_BITRATES: &'static [u32] = &[32, 48, 64, 96, 128, 192, 256, 320];
     pub const RECORD_SAMPLE_RATE: u32 = 44_100;
     pub const MPEG2_SAMPLE_RATES: &'static [u32] = &[16_000, 22_050];
 
