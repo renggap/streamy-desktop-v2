@@ -23,6 +23,15 @@ pub struct AppSettings {
     pub start_minimized: bool,
     pub auto_reconnect: bool,
     pub record_with_stream: bool,
+    /// "mic" or "playlist": what goes on air.
+    pub input_source: String,
+    /// Play the playlist through the speakers too.
+    pub monitor_playlist: bool,
+    /// Send each playlist track's title to listeners when it starts.
+    pub send_track_titles: bool,
+    pub player_volume: f32,
+    pub auto_advance: bool,
+    pub repeat: bool,
 }
 
 impl Default for AppSettings {
@@ -37,6 +46,12 @@ impl Default for AppSettings {
             start_minimized: false,
             auto_reconnect: true,
             record_with_stream: false,
+            input_source: "mic".into(),
+            monitor_playlist: true,
+            send_track_titles: true,
+            player_volume: 1.0,
+            auto_advance: true,
+            repeat: false,
         }
     }
 }
@@ -56,6 +71,13 @@ impl AppSettings {
         if self.language != "en" && self.language != "id" {
             self.language = "en".into();
         }
+        if self.input_source != "mic" && self.input_source != "playlist" {
+            self.input_source = "mic".into();
+        }
+        if !self.player_volume.is_finite() {
+            self.player_volume = 1.0;
+        }
+        self.player_volume = self.player_volume.clamp(0.0, 1.0);
         self
     }
 }

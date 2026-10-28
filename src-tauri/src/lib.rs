@@ -1,4 +1,5 @@
 pub mod audio_cpal;
+pub mod audio_out;
 pub mod commands;
 pub mod events;
 pub mod logging;
@@ -16,6 +17,8 @@ use events::{EVENT_RECORD_STATE, EVENT_STREAM_STATE};
 use power::{Hold, PowerInhibitor};
 use storage::db::ProfileDb;
 use storage::prefs::SettingsStorage;
+use streamy_core::audio::player::PlaylistPlayer;
+use streamy_core::audio::switch::{InputControl, InputKind};
 use streamy_core::core::teardown_state::{RecordState, StreamState};
 use streamy_core::session::record_session::RecordSession;
 use streamy_core::session::stream_session::StreamSession;
@@ -122,10 +125,32 @@ pub fn run() {
         app_handle: app_handle_holder.clone(),
         log_dir,
         mic_test: Arc::new(parking_lot::Mutex::new(None)),
-        mic_gain: Arc::new(parking_lot::Mutex::new(1.0)),
+        input: InputControl::new(
+            if initial_settings.input_source == "playlist" { InputKind::Playlist } else { InputKind::Mic },
+            initial_settings.mic_gain,
+        ),
+        player: PlaylistPlayer::new(),
+        monitor: Arc::new(parking_lot::Mutex::new(None)),
+        playlist_path: app_dir.join("playlist.json"),
     };
     // Saved gain applies from the first capture, not only after the slider moves.
     app_state.set_gain(initial_settings.mic_gain);
+    app_state.restore_player(&initial_settings);
+
+    // Player events arrive on its audio clock thread; handle them (file writes,
+    // opening the speakers, IPC) on a worker so playback never stalls.
+    let (player_tx, player_rx) = std::sync::mpsc::channel();
+    app_state.player.set_event_handler(Arc::new(move |e| {
+        let _ = player_tx.send(e);
+    }));
+    let worker_state = app_state.clone();
+    let _ = std::thread::Builder::new()
+        .name("streamy-player-events".into())
+        .spawn(move || {
+            for event in player_rx {
+                worker_state.on_player_event(event);
+            }
+        });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -135,6 +160,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--autostart"]),
         ))
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(move |app| {
             *app_handle_holder.lock() = Some(app.handle().clone());
@@ -196,6 +222,21 @@ pub fn run() {
             commands::get_app_info,
             commands::open_log_folder,
             commands::open_recordings_folder,
+            commands::set_input_source,
+            commands::get_player,
+            commands::playlist_pick_files,
+            commands::playlist_add,
+            commands::playlist_remove,
+            commands::playlist_move,
+            commands::playlist_clear,
+            commands::player_play,
+            commands::player_pause,
+            commands::player_stop,
+            commands::player_next,
+            commands::player_previous,
+            commands::player_seek,
+            commands::player_set_volume,
+            commands::player_set_options,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

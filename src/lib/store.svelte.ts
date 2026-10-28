@@ -1,7 +1,20 @@
 import { api, errorText } from "./api";
 import { friendlyError } from "./errors";
+import { fileName } from "./format";
 import { setLanguage, t, type TranslationKey } from "../i18n/index.svelte";
-import type { AppInfo, AppSettings, AppStatus, AudioDeviceDesc, Profile } from "../types";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type {
+  AddResult,
+  AppInfo,
+  AppSettings,
+  AppStatus,
+  AudioDeviceDesc,
+  InputKind,
+  PlayerSnapshot,
+  PlayerStatus,
+  Profile,
+  Track,
+} from "../types";
 
 const POLL_MS = 1000;
 const SILENCE_DB = -90;
@@ -24,6 +37,22 @@ const DEFAULT_SETTINGS: AppSettings = {
   start_minimized: false,
   auto_reconnect: true,
   record_with_stream: false,
+  input_source: "mic",
+  monitor_playlist: true,
+  send_track_titles: true,
+  player_volume: 1,
+  auto_advance: true,
+  repeat: false,
+};
+
+const IDLE_PLAYER: PlayerStatus = {
+  state: "Stopped",
+  current_id: null,
+  position_secs: 0,
+  duration_secs: null,
+  volume: 1,
+  auto_advance: true,
+  repeat: false,
 };
 
 const IDLE_STATUS: AppStatus = {
@@ -41,6 +70,9 @@ const IDLE_STATUS: AppStatus = {
   },
   recording: { active: false, with_stream: false, path: null, secs: 0, bytes: 0, error: null },
   mic_test: false,
+  input: "mic",
+  mic_available: true,
+  player: IDLE_PLAYER,
 };
 
 export function emptyProfile(): Profile {
@@ -85,6 +117,14 @@ class AppStore {
   errorDismissed = $state(false);
   lastRecordingPath = $state<string | null>(null);
   toasts = $state<Toast[]>([]);
+  tracks = $state<Track[]>([]);
+  player = $state<PlayerStatus>(IDLE_PLAYER);
+  /** When `player.position_secs` was reported, to interpolate between polls. */
+  #playerAt = 0;
+  /** Ticks while playing so the position display advances smoothly. */
+  clock = $state(Date.now());
+  /** Files are being dragged over the window. */
+  dragging = $state(false);
 
   #toastSeq = 0;
   #pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +138,14 @@ class AppStore {
   isStreaming = $derived(this.streamType !== "Idle" && this.streamType !== "Error");
   isRecording = $derived(this.status.recording.active);
   meterActive = $derived(this.isStreaming || this.isRecording || this.status.mic_test);
+  input = $derived<InputKind>(this.status.input);
+  currentTrack = $derived(this.tracks.find((t) => t.id === this.player.current_id) ?? null);
+  position = $derived.by(() => {
+    const p = this.player;
+    if (p.state !== "Playing") return p.position_secs;
+    const pos = p.position_secs + Math.max(0, this.clock - this.#playerAt) / 1000;
+    return p.duration_secs ? Math.min(pos, p.duration_secs) : pos;
+  });
 
   async init() {
     try {
@@ -105,6 +153,20 @@ class AppStore {
         await api.onStreamState(() => void this.refresh()),
         await api.onRecordState(() => void this.refresh()),
         await api.onStreamRecording(() => void this.refresh()),
+        await api.onPlayer((p) => this.#onPlayer(p)),
+        await api.onPlayerError((e) => {
+          const f = friendlyError(e.reason);
+          this.toast("error", t("toastTrackSkipped", { title: e.title }), f.detail ?? f.message);
+        }),
+        await getCurrentWebview().onDragDropEvent((e) => {
+          const p = e.payload;
+          if (p.type === "enter" || p.type === "over") this.dragging = true;
+          else if (p.type === "leave") this.dragging = false;
+          else if (p.type === "drop") {
+            this.dragging = false;
+            if (p.paths.length) void this.addPaths(p.paths);
+          }
+        }),
         await api.onLevels((l) => {
           this.level = { rms: l.rms_db, peak: l.peak_db };
         }),
@@ -113,11 +175,13 @@ class AppStore {
       console.error("event subscription failed", e);
     }
 
-    const [settings, profiles, info] = await Promise.allSettled([
+    const [settings, profiles, info, player] = await Promise.allSettled([
       api.getSettings(),
       api.listProfiles(),
       api.getAppInfo(),
+      api.getPlayer(),
     ]);
+    if (player.status === "fulfilled") this.#onPlayer(player.value);
     if (settings.status === "fulfilled") this.settings = settings.value;
     if (profiles.status === "fulfilled") this.profiles = profiles.value;
     if (info.status === "fulfilled") this.info = info.value;
@@ -132,10 +196,16 @@ class AppStore {
     this.ready = true;
     void this.loadDevices();
     this.#pollTimer = setInterval(() => void this.refresh(), POLL_MS);
+    this.#clockTimer = setInterval(() => {
+      if (this.player.state === "Playing") this.clock = Date.now();
+    }, 250);
   }
+
+  #clockTimer: ReturnType<typeof setInterval> | null = null;
 
   destroy() {
     if (this.#pollTimer) clearInterval(this.#pollTimer);
+    if (this.#clockTimer) clearInterval(this.#clockTimer);
     this.#unlisten.forEach((u) => u());
     this.#unlisten = [];
   }
@@ -162,6 +232,18 @@ class AppStore {
       this.level = { rms: SILENCE_DB, peak: SILENCE_DB };
     }
     this.status = s;
+    this.#setPlayer(s.player);
+  }
+
+  #setPlayer(p: PlayerStatus) {
+    this.player = p;
+    this.#playerAt = Date.now();
+    this.clock = this.#playerAt;
+  }
+
+  #onPlayer(p: PlayerSnapshot) {
+    this.tracks = p.tracks;
+    this.#setPlayer(p.status);
   }
 
   // ---- toasts -----------------------------------------------------------
@@ -284,6 +366,104 @@ class AppStore {
       this.pending = null;
       await this.refresh();
     }
+  }
+
+  // ---- input switch & playlist -----------------------------------------------
+
+  async setInput(kind: InputKind) {
+    if (kind === this.status.input) return;
+    const prev = this.status.input;
+    this.status.input = kind; // optimistic: switching is instant on the backend
+    try {
+      await api.setInputSource(kind);
+      this.settings.input_source = kind;
+    } catch (e) {
+      this.status.input = prev;
+      this.toastError(e);
+    }
+  }
+
+  #reportAdd(r: AddResult) {
+    if (r.added.length) this.toastKey("success", "toastTracksAdded", { count: r.added.length });
+    if (r.failed.length) {
+      const detail = r.failed.map(([path, why]) => `${fileName(path)}: ${why}`).join("\n");
+      this.toast("error", t("toastTracksFailed", { count: r.failed.length }), detail);
+    }
+    if (!r.added.length && !r.failed.length) this.toastKey("info", "toastNoAudioFiles");
+  }
+
+  async pickFiles() {
+    try {
+      const r = await api.pickFiles();
+      if (r) this.#reportAdd(r);
+    } catch (e) {
+      this.toastError(e);
+    }
+  }
+
+  async addPaths(paths: string[]) {
+    try {
+      this.#reportAdd(await api.addFiles(paths));
+    } catch (e) {
+      this.toastError(e);
+    }
+  }
+
+  async #player(action: () => Promise<unknown>) {
+    try {
+      await action();
+    } catch (e) {
+      this.toastError(e);
+    }
+    try {
+      this.#onPlayer(await api.getPlayer());
+    } catch {
+      /* the next event or poll catches up */
+    }
+  }
+
+  play(id: number | null = null) {
+    return this.#player(() => api.play(id));
+  }
+  togglePlay() {
+    return this.player.state === "Playing" ? this.#player(() => api.pause()) : this.play();
+  }
+  stopPlayer() {
+    return this.#player(() => api.stopPlayer());
+  }
+  next() {
+    return this.#player(() => api.next());
+  }
+  previous() {
+    return this.#player(() => api.previous());
+  }
+  seek(secs: number) {
+    return this.#player(() => api.seek(secs));
+  }
+  removeTrack(id: number) {
+    return this.#player(() => api.removeTrack(id));
+  }
+  moveTrack(id: number, to: number) {
+    return this.#player(() => api.moveTrack(id, to));
+  }
+  clearPlaylist() {
+    return this.#player(() => api.clearPlaylist());
+  }
+
+  #volumeTimer: ReturnType<typeof setTimeout> | null = null;
+  setPlayerVolume(v: number) {
+    this.player.volume = v;
+    this.settings.player_volume = v;
+    if (this.#volumeTimer) clearTimeout(this.#volumeTimer);
+    this.#volumeTimer = setTimeout(() => {
+      api.setPlayerVolume(v).catch((e) => this.toastError(e));
+    }, 80);
+  }
+
+  setPlayerOptions(autoAdvance: boolean, repeat: boolean) {
+    this.settings.auto_advance = autoAdvance;
+    this.settings.repeat = repeat;
+    return this.#player(() => api.setPlayerOptions(autoAdvance, repeat));
   }
 
   // ---- settings & profiles ---------------------------------------------------

@@ -1,6 +1,6 @@
 # Streamy Desktop v2
 
-Windows desktop app (Tauri 2 + Rust + Svelte 5) that streams mic audio to SHOUTcast v2 (DNAS2) and Icecast servers over Ultravox 2.1 or ICE/1.0, plus a standalone MP3 recorder. Faithfully ported from Streamy Android.
+Windows desktop app (Tauri 2 + Rust + Svelte 5) that streams the microphone or a local-file playlist (switchable live) to SHOUTcast v2 (DNAS2) and Icecast servers over Ultravox 2.1 or ICE/1.0, plus a standalone MP3 recorder. Faithfully ported from Streamy Android.
 
 ## Hard Rules & Principles
 
@@ -21,12 +21,14 @@ streamy-desktop-v2/
       src/core/                    XTEA, Ultravox framing, ADTS, WireSafety, AudioConfigRules,
                                    DjProtocol, backoff ladder, LevelTap, TeardownState
       src/net/                     UvoxClient, IcecastSourceClient, StreamTransport
-      src/audio/                   AudioSource trait, pipeline, rubato resample, stream sinks
+      src/audio/                   AudioSource trait, pipeline, rubato resample, stream sinks,
+                                   symphonia file decoder, playlist player, mic/playlist switch
       src/session/                 stream_session, record_session
       tests/                       Golden vector unit tests, mock servers, session lifecycle
     streamy-lame/                  Vendored LAME 3.100 (encoder-only) + safe Rust FFI wrapper
   src-tauri/                       Windows desktop shell
     src/audio_cpal.rs              WASAPI AudioSource via cpal with rubato resampling
+    src/audio_out.rs               Speaker monitoring of the playlist (cpal output)
     src/power.rs                   SetThreadExecutionState sleep inhibitor
     src/secrets.rs                 Windows Credential Manager via keyring
     src/storage/                   SQLite profiles (rusqlite) & atomic JSON preferences
@@ -34,11 +36,11 @@ streamy-desktop-v2/
     src/events.rs                  Tauri UI event emitters
     src/tray.rs                    System tray menu & window minimize-to-tray
     src/logging.rs                 Tracing rolling file logger with credential redaction
-  src/                             Svelte 5 + Vite + TypeScript UI (Hallmark console palette)
+  src/                             Svelte 5 + Vite + TypeScript + Tailwind v4 UI (JokoUI style: light, dark accent)
     src/i18n/                      Strict 1:1 translation dictionaries (en, id)
     src/lib/store.svelte.ts        Single app store: status polling + events, actions, toasts
     src/lib/errors.ts              Maps backend error codes/messages to friendly, translated text
-    src/lib/components/            Svelte 5 components (on-air panel, meter, servers, settings)
+    src/lib/components/            Sidebar, on-air hero, source switch, playlist, mic, servers, settings
   scripts/                         LAME build & relinking scripts (PowerShell, .mjs, bash)
   docs/                            Design documentation & porting roadmap
 ```
@@ -104,6 +106,9 @@ In compliance with the GNU LGPL v2.1 for LAME MP3 Encoder:
 | **9. Sleep inhibition** | Broadcast for 30 minutes with sleep enabled. | The PC stays awake until the broadcast and recording both stop. |
 | **10. Credentials** | Save a server with a password, restart. | Password lives in Credential Manager; the editor shows "Saved · leave empty to keep"; deleting the server removes it. |
 | **11. Language** | Settings › General › Bahasa Indonesia. | Every card and dialog switches language instantly, no reload. |
+| **12. Playlist** | Add MP3/WAV/FLAC/OGG/M4A files (Add files or drag onto the window), play, seek, reorder, remove. | Tracks show title and length; playback is heard in the speakers when *Hear in speakers* is on; auto-advance and repeat work; the queue survives a restart. |
+| **13. Source switch** | Go live on Microphone, switch to Playlist and back while live. | Switch is instant with no reconnect; listeners hear only the selected source; with *Send each track's title* on, each new track updates the title. |
+| **14. No mic** | Unplug the mic, select Playlist, go live. | Broadcast starts from the playlist; the Microphone tile shows it is unavailable; pausing the playlist sends silence instead of dropping the connection. |
 
 ---
 
