@@ -12,8 +12,11 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use streamy_core::audio::decoder::SUPPORTED_EXTENSIONS;
 use streamy_core::audio::pipeline::LevelFeedFn;
+use streamy_core::audio::player::{AddResult, PlayState, PlayerEvent, PlayerStatus, PlaylistPlayer, Track};
 use streamy_core::audio::source::AudioSource;
+use streamy_core::audio::switch::{InputControl, InputKind, SwitchSource};
 use streamy_core::core::audio_config_rules::{AudioConfig, AudioConfigRules, BroadcastMode, Codec, DjProtocol};
 use streamy_core::core::level::LevelTap;
 use streamy_core::core::teardown_state::{RecordState, StreamState};
@@ -21,6 +24,7 @@ use streamy_core::session::record_session::RecordSession;
 use streamy_core::session::stream_session::{StreamProfile, StreamSession, StreamStats};
 
 use crate::audio_cpal::{AudioDeviceDesc, CpalAudioSource};
+use crate::audio_out::MonitorOutput;
 use crate::events::*;
 use crate::power::PowerInhibitor;
 use crate::secrets;
@@ -45,7 +49,11 @@ pub struct AppState {
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     pub log_dir: PathBuf,
     pub mic_test: Arc<Mutex<Option<CpalAudioSource>>>,
-    pub mic_gain: Arc<Mutex<f32>>,
+    /// Which input is on air, and the mic gain; read live by the audio threads.
+    pub input: Arc<InputControl>,
+    pub player: Arc<PlaylistPlayer>,
+    pub monitor: Arc<Mutex<Option<MonitorOutput>>>,
+    pub playlist_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +73,16 @@ pub struct AppStatus {
     pub stats: StreamStats,
     pub recording: RecordingStatus,
     pub mic_test: bool,
+    pub input: InputKind,
+    /// False when the running broadcast/recording could not open the mic.
+    pub mic_available: bool,
+    pub player: PlayerStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerSnapshot {
+    pub status: PlayerStatus,
+    pub tracks: Vec<Track>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,7 +184,124 @@ impl AppState {
             stats,
             recording,
             mic_test: self.mic_test.lock().is_some(),
+            input: self.input.kind(),
+            mic_available: !(self.capture_active() && self.input.mic_failed()),
+            player: self.player.status(),
         }
+    }
+
+    fn capture_active(&self) -> bool {
+        self.stream_session.is_active() || matches!(self.record_session.state(), RecordState::Recording { .. })
+    }
+
+    /// Mic + playlist behind the live input switch, at the encoder's format.
+    fn switch_source(&self, device: Option<String>, sample_rate: u32, mono: bool) -> Box<dyn AudioSource> {
+        Box::new(SwitchSource::new(
+            Box::new(CpalAudioSource::new(device, sample_rate, mono)),
+            self.player.clone(),
+            sample_rate,
+            mono,
+            self.input.clone(),
+        ))
+    }
+
+    pub fn player_snapshot(&self) -> PlayerSnapshot {
+        PlayerSnapshot {
+            status: self.player.status(),
+            tracks: self.player.tracks(),
+        }
+    }
+
+    /// Restore the queue and player options saved last time.
+    pub fn restore_player(&self, settings: &AppSettings) {
+        self.player.set_volume(settings.player_volume);
+        self.player.set_options(settings.auto_advance, settings.repeat);
+        let paths: Vec<String> = std::fs::read_to_string(&self.playlist_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        let existing: Vec<String> = paths.into_iter().filter(|p| std::path::Path::new(p).is_file()).collect();
+        if !existing.is_empty() {
+            let res = self.player.add_files(&existing);
+            if !res.failed.is_empty() {
+                tracing::warn!("{} saved playlist file(s) could not be read", res.failed.len());
+            }
+        }
+    }
+
+    fn save_playlist(&self) {
+        let paths: Vec<String> = self.player.tracks().into_iter().map(|t| t.path).collect();
+        let tmp = self.playlist_path.with_extension("tmp");
+        let result = serde_json::to_string_pretty(&paths)
+            .map_err(|e| e.to_string())
+            .and_then(|json| std::fs::write(&tmp, json).map_err(|e| e.to_string()))
+            .and_then(|_| std::fs::rename(&tmp, &self.playlist_path).map_err(|e| e.to_string()));
+        if let Err(e) = result {
+            tracing::warn!("saving playlist failed: {e}");
+        }
+    }
+
+    /// Speakers follow the player while it has a track loaded and monitoring is on.
+    fn sync_monitor(&self) {
+        let want = self.prefs.lock().load().monitor_playlist && self.player.status().state != PlayState::Stopped;
+        let mut monitor = self.monitor.lock();
+        if want && monitor.is_none() {
+            match MonitorOutput::start(self.player.clone()) {
+                Ok(m) => *monitor = Some(m),
+                Err(e) => tracing::warn!("playlist monitoring unavailable: {e}"),
+            }
+        } else if !want {
+            if let Some(mut m) = monitor.take() {
+                m.stop();
+            }
+        }
+    }
+
+    /// Tell listeners what's playing, if the playlist is what they hear.
+    fn announce_track(&self, track: &Track) {
+        if !self.stream_session.is_active() || self.input.kind() != InputKind::Playlist {
+            return;
+        }
+        if !self.prefs.lock().load().send_track_titles {
+            return;
+        }
+        if let Err(e) = self.stream_session.update_now_playing(&track.title) {
+            tracing::warn!("track title update failed: {e}");
+        }
+    }
+
+    /// Runs on the player's event worker thread, never the audio clock.
+    pub fn on_player_event(&self, event: PlayerEvent) {
+        match event {
+            PlayerEvent::Changed => {
+                self.save_playlist();
+                self.sync_monitor();
+            }
+            PlayerEvent::TrackStarted(track) => self.announce_track(&track),
+            PlayerEvent::TrackFailed { track, reason } => {
+                if let Some(h) = self.handle() {
+                    let _ = h.emit(EVENT_PLAYER_ERROR, PlayerErrorPayload { title: track.title, reason });
+                }
+            }
+        }
+        if let Some(h) = self.handle() {
+            let _ = h.emit(EVENT_PLAYER_CHANGED, self.player_snapshot());
+        }
+    }
+
+    pub fn set_input_source(&self, kind: InputKind) -> Result<(), String> {
+        if kind == InputKind::Mic && self.capture_active() && self.input.mic_failed() {
+            return Err("mic_unavailable".into());
+        }
+        self.input.set_kind(kind);
+        let name = if kind == InputKind::Playlist { "playlist" } else { "mic" };
+        self.prefs.lock().update(|s| s.input_source = name.into())?;
+        if kind == InputKind::Playlist && self.player.status().state == PlayState::Playing {
+            if let Some(t) = self.player.current_track() {
+                self.announce_track(&t);
+            }
+        }
+        Ok(())
     }
 
     pub fn stop_mic_test(&self) {
@@ -184,10 +319,10 @@ impl AppState {
         let settings = self.prefs.lock().load();
         let mut src = CpalAudioSource::new(settings.input_device_name, 44_100, true);
         let feed = self.level_feed();
-        let gain = self.mic_gain.clone();
+        let input = self.input.clone();
         src.start(Box::new(move |pcm| {
             if let Some(ref feed) = feed {
-                let g = *gain.lock();
+                let g = input.mic_gain();
                 let scaled: Vec<i16> = pcm
                     .iter()
                     .map(|&s| (s as f32 * g).clamp(-32768.0, 32767.0) as i16)
@@ -272,13 +407,19 @@ impl AppState {
         // The meter now follows the broadcast pipeline.
         self.stop_mic_test();
 
-        let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(
+        let audio_source = self.switch_source(
             settings.input_device_name.clone(),
             stream_prof.sample_rate_hz,
             stream_prof.mono,
-        ));
+        );
         self.stream_session
             .start(stream_prof, audio_source, self.level_feed())?;
+
+        if self.input.kind() == InputKind::Playlist && self.player.status().state == PlayState::Playing {
+            if let Some(t) = self.player.current_track() {
+                self.announce_track(&t);
+            }
+        }
 
         if settings.selected_profile_id != Some(id) {
             let _ = self.prefs.lock().update(|s| s.selected_profile_id = Some(id));
@@ -316,11 +457,11 @@ impl AppState {
         self.stop_mic_test();
         let settings = self.prefs.lock().load();
         let path = self.recordings_dir().join(RecordSession::generate_filename());
-        let source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(
+        let source = self.switch_source(
             settings.input_device_name,
             RECORD_CONFIG.sample_rate_hz,
             RECORD_CONFIG.mono,
-        ));
+        );
         self.record_session
             .start(RECORD_CONFIG, path, source, self.level_feed())
     }
@@ -342,16 +483,18 @@ impl AppState {
 
     pub fn set_gain(&self, gain: f32) -> f32 {
         let gain = if gain.is_finite() { gain.clamp(MIN_GAIN, MAX_GAIN) } else { 1.0 };
-        *self.mic_gain.lock() = gain;
-        self.stream_session.set_mic_gain(gain);
-        self.record_session.set_mic_gain(gain);
-        gain
+        // Applied by the input switch to mic audio only; the pipeline stays at unity.
+        self.input.set_mic_gain(gain)
     }
 
     pub fn shutdown(&self) {
         self.stop_mic_test();
         self.stream_session.stop_and_shutdown(false);
         self.record_session.stop_and_shutdown(false);
+        if let Some(mut m) = self.monitor.lock().take() {
+            m.stop();
+        }
+        self.player.shutdown();
     }
 }
 
@@ -452,6 +595,9 @@ pub async fn save_settings(state: State<'_, AppState>, settings: AppSettings) ->
         let previous = st.prefs.lock().load();
         st.prefs.lock().save(&settings)?;
         st.set_gain(settings.mic_gain);
+        if previous.monitor_playlist != settings.monitor_playlist {
+            st.sync_monitor();
+        }
 
         // A different mic only applies to the next capture; restart the test meter now.
         if previous.input_device_name != settings.input_device_name && st.mic_test.lock().is_some() {
@@ -710,6 +856,162 @@ pub async fn clear_all_profiles(state: State<'_, AppState>) -> Result<(), String
             .clear()
             .map_err(|e| format!("Failed to clear profiles: {e}"))?;
         let _ = st.prefs.lock().update(|s| s.selected_profile_id = None);
+        Ok(())
+    })
+    .await
+}
+
+// ---- playlist ----------------------------------------------------------------
+
+#[tauri::command]
+pub async fn set_input_source(state: State<'_, AppState>, source: InputKind) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || st.set_input_source(source)).await
+}
+
+#[tauri::command]
+pub async fn get_player(state: State<'_, AppState>) -> Result<PlayerSnapshot, String> {
+    let st = state.inner().clone();
+    blocking(move || Ok(st.player_snapshot())).await
+}
+
+/// Native multi-file picker; `None` when the user cancels.
+#[tauri::command]
+pub async fn playlist_pick_files(app: AppHandle, state: State<'_, AppState>) -> Result<Option<AddResult>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let st = state.inner().clone();
+    blocking(move || {
+        let picked = app
+            .dialog()
+            .file()
+            .add_filter("Audio", SUPPORTED_EXTENSIONS)
+            .blocking_pick_files();
+        let Some(files) = picked else { return Ok(None) };
+        let paths: Vec<String> = files
+            .into_iter()
+            .filter_map(|f| f.into_path().ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        Ok(Some(st.player.add_files(&paths)))
+    })
+    .await
+}
+
+/// Add dropped files; folders and unsupported types are skipped.
+#[tauri::command]
+pub async fn playlist_add(state: State<'_, AppState>, paths: Vec<String>) -> Result<AddResult, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let audio: Vec<String> = paths
+            .into_iter()
+            .filter(|p| {
+                let path = std::path::Path::new(p);
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| SUPPORTED_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+            })
+            .collect();
+        Ok(st.player.add_files(&audio))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn playlist_remove(state: State<'_, AppState>, id: u64) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.remove(id);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn playlist_move(state: State<'_, AppState>, id: u64, to: usize) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.move_track(id, to);
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn playlist_clear(state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.clear();
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn player_play(state: State<'_, AppState>, id: Option<u64>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || st.player.play(id)).await
+}
+
+#[tauri::command]
+pub async fn player_pause(state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.pause();
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn player_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.stop();
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn player_next(state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || st.player.next()).await
+}
+
+#[tauri::command]
+pub async fn player_previous(state: State<'_, AppState>) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || st.player.previous()).await
+}
+
+#[tauri::command]
+pub async fn player_seek(state: State<'_, AppState>, secs: f64) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || st.player.seek(secs)).await
+}
+
+#[tauri::command]
+pub async fn player_set_volume(state: State<'_, AppState>, volume: f32) -> Result<f32, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let v = st.player.set_volume(if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 });
+        st.prefs.lock().update(|s| s.player_volume = v)?;
+        Ok(v)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn player_set_options(state: State<'_, AppState>, auto_advance: bool, repeat: bool) -> Result<(), String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        st.player.set_options(auto_advance, repeat);
+        st.prefs.lock().update(|s| {
+            s.auto_advance = auto_advance;
+            s.repeat = repeat;
+        })?;
         Ok(())
     })
     .await

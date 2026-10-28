@@ -13,6 +13,14 @@ pub const EVENT_STREAM_STATE: &str = "stream-state-changed";
 pub const EVENT_LEVELS: &str = "levels-changed";
 pub const EVENT_RECORD_STATE: &str = "record-state-changed";
 pub const EVENT_STREAM_RECORDING: &str = "stream-recording-changed";
+pub const EVENT_PLAYER_CHANGED: &str = "player-changed";
+pub const EVENT_PLAYER_ERROR: &str = "player-error";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerErrorPayload {
+    pub title: String,
+    pub reason: String,
+}
 
 /// ~30 Hz is plenty for a meter; the pipeline produces ~43 snapshots/s and IPC isn't free.
 const LEVEL_EMIT_INTERVAL: Duration = Duration::from_millis(33);

@@ -44,10 +44,13 @@
 
 <section class="card">
   <div class="card-head">
-    <h2 class="card-title">{t("audioTitle")}</h2>
+    <div>
+      <h2 class="card-title">{t("audioTitle")}</h2>
+      <p class="card-sub">{store.input === "mic" ? t("micOnAirHint") : t("micOffAirHint")}</p>
+    </div>
     <button
       class="btn btn-sm"
-      class:btn-primary={store.status.mic_test}
+      class:btn-dark={store.status.mic_test}
       onclick={() => store.toggleMicTest()}
       disabled={store.isStreaming || store.isRecording || store.pending !== null}
     >
@@ -124,16 +127,12 @@
   }
   .label {
     font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
+    font-weight: 500;
+    color: var(--color-gray-700);
   }
   .value {
     min-width: 68px;
     text-align: right;
     font-size: 12px;
-  }
-  input[type="range"] {
-    width: 100%;
-    accent-color: var(--primary);
   }
 </style>

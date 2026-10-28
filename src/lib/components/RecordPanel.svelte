@@ -9,7 +9,10 @@
 
 <section class="card" class:is-rec={rec.active}>
   <div class="card-head">
-    <h2 class="card-title">{t("recordTitle")}</h2>
+    <div>
+      <h2 class="card-title">{t("recordTitle")}</h2>
+      <p class="card-sub">{t("recordSub")}</p>
+    </div>
     <button class="btn btn-ghost btn-sm" onclick={() => store.openRecordings()}>
       <Icon name="folder" size={14} />{t("btnOpenFolder")}
     </button>
@@ -45,31 +48,31 @@
   </div>
 
   {#if rec.active && rec.path}
-    <p class="hint truncate mono" title={rec.path}>{fileName(rec.path)}</p>
+    <p class="hint truncate font-mono" title={rec.path}>{fileName(rec.path)}</p>
   {:else if store.lastRecordingPath}
     <p class="hint truncate" title={store.lastRecordingPath}>{t("lastRecording", { file: fileName(store.lastRecordingPath) })}</p>
   {/if}
 
-  <label class="check">
+  <label class="switch">
     <input
       type="checkbox"
       checked={store.settings.record_with_stream}
       onchange={(e) => store.saveSettings({ record_with_stream: e.currentTarget.checked }, true)}
     />
-    <span>{t("recordWithStreamLabel")}</span>
+    <span></span>{t("recordWithStreamLabel")}
   </label>
 </section>
 
 <style>
   .is-rec {
-    border-color: var(--live);
+    border-color: var(--color-red-500);
   }
   .main {
     align-items: center;
     gap: 12px;
   }
   .red {
-    color: var(--live);
+    color: var(--color-red-600);
     display: flex;
   }
   .status strong {
@@ -79,7 +82,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--live);
+    background: var(--color-red-600);
     animation: pulse 1.4s ease-in-out infinite;
   }
   @keyframes pulse {
