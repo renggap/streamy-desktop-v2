@@ -5,7 +5,7 @@
     | "trash" | "folder" | "refresh" | "x" | "check" | "alert" | "info" | "record"
     | "chevron-down" | "arrow-left" | "music" | "send" | "play" | "pause" | "skip-back"
     | "skip-forward" | "repeat" | "list-end" | "volume" | "headphones" | "arrow-up" | "arrow-down"
-    | "file-plus" | "layout" | "upload";
+    | "file-plus" | "layout" | "upload" | "download";
   let { name, size = 16 }: { name: Name; size?: number } = $props();
   const FILLED = new Set<Name>(["record", "play", "pause", "skip-back", "skip-forward"]);
 
@@ -42,6 +42,7 @@
     "arrow-down": "M12 5v14 M19 12l-7 7-7-7",
     "file-plus": "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4 M9 15h6 M12 18v-6",
     layout: "M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z",
+    download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
     upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
   };
 </script>

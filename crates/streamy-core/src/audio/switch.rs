@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::audio::denoise::NoiseSuppression;
 use crate::audio::player::{PlayerSource, PlaylistPlayer};
 use crate::audio::source::{AudioSource, FrameCallback};
 
@@ -31,6 +32,7 @@ pub struct InputControl {
     kind: AtomicU8,
     mic_gain: AtomicU32,
     mic_failed: AtomicBool,
+    noise: AtomicU8,
 }
 
 impl InputControl {
@@ -39,6 +41,7 @@ impl InputControl {
             kind: AtomicU8::new(kind as u8),
             mic_gain: AtomicU32::new(sanitize_gain(mic_gain).to_bits()),
             mic_failed: AtomicBool::new(false),
+            noise: AtomicU8::new(NoiseSuppression::Off as u8),
         })
     }
 
@@ -71,6 +74,14 @@ impl InputControl {
 
     pub fn reset_mic_failed(&self) {
         self.mic_failed.store(false, Ordering::Relaxed);
+    }
+
+    pub fn noise_suppression(&self) -> NoiseSuppression {
+        NoiseSuppression::from_u8(self.noise.load(Ordering::Relaxed))
+    }
+
+    pub fn set_noise_suppression(&self, level: NoiseSuppression) {
+        self.noise.store(level as u8, Ordering::Relaxed);
     }
 }
 

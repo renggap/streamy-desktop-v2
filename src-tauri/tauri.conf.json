@@ -28,7 +28,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,6 +45,18 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "windows/hooks.nsh"
+      }
+    },
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwQUE1NjJCNzU3OENDNkMKUldSc3pIaDFLMWFxUU15a01wOExaekVNdVEwSEdyK1laWk5tTXFqVkh2SFlOL2JuQkpxZDdlYkYK",
+      "endpoints": [
+        "https://github.com/renggap/streamy-desktop-v2/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
       }
     }
   }

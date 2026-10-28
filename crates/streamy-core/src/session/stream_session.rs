@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::audio::pipeline::{AudioPipeline, LevelFeedFn};
-use crate::audio::sink::Mp3DirectSink;
+use crate::audio::sink::{Mp3DirectSink, Mp3EncodeSink, StreamSink};
 use crate::audio::source::AudioSource;
 use crate::core::audio_config_rules::{AudioConfig, AudioConfigRules, BroadcastMode, Codec, DjProtocol};
 use crate::core::backoff::MAX_ATTEMPTS;
@@ -114,6 +114,8 @@ struct Active {
     client: SharedClient,
     abort: AbortHandle,
     started: Instant,
+    /// What the encoder actually produces (after clamping).
+    config: AudioConfig,
 }
 
 /// Title to (re)announce: set by the UI, delivered by the transport worker
@@ -404,6 +406,7 @@ impl StreamSession {
                 client,
                 abort,
                 started: Instant::now(),
+                config: cfg,
             });
         }
         self.live_drop_baseline.store(0, Ordering::SeqCst);
@@ -534,7 +537,10 @@ impl StreamSession {
         self.now_playing.title.lock().clone()
     }
 
-    pub fn arm_recording(&self, path: String) -> Result<(), String> {
+    /// Record the broadcast to `path` at `quality`. When that matches the
+    /// broadcast format, the broadcast's own MP3 frames are saved as-is;
+    /// otherwise a second encoder runs on the same audio.
+    pub fn arm_recording(&self, path: String, quality: AudioConfig) -> Result<(), String> {
         let active = self.active.lock();
         let Some(a) = active.as_ref() else {
             // Checked before touching the disk so a refused arm leaves no empty file.
@@ -546,7 +552,27 @@ impl StreamSession {
             .create_new(true)
             .open(&path)
             .map_err(|e| format!("Cannot create recording file {path:?}: {e}"))?;
-        a.pipeline.arm_record(Box::new(Mp3DirectSink::new(file)));
+        let live = a.config;
+        let sink: Box<dyn StreamSink> = if quality == live {
+            Box::new(Mp3DirectSink::new(file))
+        } else {
+            let in_channels = if live.mono { 1 } else { 2 };
+            match Mp3EncodeSink::new(
+                file,
+                live.sample_rate_hz,
+                in_channels,
+                quality.sample_rate_hz,
+                quality.bitrate_kbps,
+                quality.mono,
+            ) {
+                Ok(s) => Box::new(s),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(e);
+                }
+            }
+        };
+        a.pipeline.arm_record(sink);
         *self.recording_path.lock() = Some(path);
         *self.recording_since.lock() = Some(Instant::now());
         self.is_recording.store(true, Ordering::SeqCst);

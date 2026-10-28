@@ -31,14 +31,6 @@ use crate::secrets;
 use crate::storage::db::{ProfileDb, ProfileRecord, KEYRING_SENTINEL};
 use crate::storage::prefs::{AppSettings, SettingsStorage, MAX_GAIN, MIN_GAIN};
 
-/// Standalone recordings are archival copies: fixed, good speech quality.
-const RECORD_CONFIG: AudioConfig = AudioConfig {
-    codec: Codec::MP3,
-    bitrate_kbps: 128,
-    sample_rate_hz: 44_100,
-    mono: true,
-};
-
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<ProfileDb>>,
@@ -197,7 +189,7 @@ impl AppState {
     /// Mic + playlist behind the live input switch, at the encoder's format.
     fn switch_source(&self, device: Option<String>, sample_rate: u32, mono: bool) -> Box<dyn AudioSource> {
         Box::new(SwitchSource::new(
-            Box::new(CpalAudioSource::new(device, sample_rate, mono)),
+            Box::new(CpalAudioSource::new(device, sample_rate, mono, self.input.clone())),
             self.player.clone(),
             sample_rate,
             mono,
@@ -317,7 +309,7 @@ impl AppState {
     pub fn start_mic_test(&self) -> Result<(), String> {
         self.stop_mic_test();
         let settings = self.prefs.lock().load();
-        let mut src = CpalAudioSource::new(settings.input_device_name, 44_100, true);
+        let mut src = CpalAudioSource::new(settings.input_device_name, 44_100, true, self.input.clone());
         let feed = self.level_feed();
         let input = self.input.clone();
         src.start(Box::new(move |pcm| {
@@ -343,9 +335,11 @@ impl AppState {
         if self.stream_session.is_recording() {
             return Ok(());
         }
+        let settings = self.prefs.lock().load();
+        let quality = AudioConfigRules::record_config(settings.record_bitrate_kbps, settings.record_mono);
         let path = self.recordings_dir().join(RecordSession::generate_filename());
         self.stream_session
-            .arm_recording(path.to_string_lossy().to_string())?;
+            .arm_recording(path.to_string_lossy().to_string(), quality)?;
         if let Some(h) = self.handle() {
             let _ = h.emit(EVENT_STREAM_RECORDING, true);
         }
@@ -456,14 +450,11 @@ impl AppState {
         }
         self.stop_mic_test();
         let settings = self.prefs.lock().load();
+        let quality = AudioConfigRules::record_config(settings.record_bitrate_kbps, settings.record_mono);
         let path = self.recordings_dir().join(RecordSession::generate_filename());
-        let source = self.switch_source(
-            settings.input_device_name,
-            RECORD_CONFIG.sample_rate_hz,
-            RECORD_CONFIG.mono,
-        );
+        let source = self.switch_source(settings.input_device_name, quality.sample_rate_hz, quality.mono);
         self.record_session
-            .start(RECORD_CONFIG, path, source, self.level_feed())
+            .start(quality, path, source, self.level_feed())
     }
 
     pub fn stop_recording(&self) {
@@ -485,6 +476,11 @@ impl AppState {
         let gain = if gain.is_finite() { gain.clamp(MIN_GAIN, MAX_GAIN) } else { 1.0 };
         // Applied by the input switch to mic audio only; the pipeline stays at unity.
         self.input.set_mic_gain(gain)
+    }
+
+    /// Anything the user would notice an update restart interrupting.
+    pub fn is_busy(&self) -> bool {
+        self.capture_active() || self.mic_test.lock().is_some() || self.player.status().state == PlayState::Playing
     }
 
     pub fn shutdown(&self) {
@@ -595,6 +591,7 @@ pub async fn save_settings(state: State<'_, AppState>, settings: AppSettings) ->
         let previous = st.prefs.lock().load();
         st.prefs.lock().save(&settings)?;
         st.set_gain(settings.mic_gain);
+        st.input.set_noise_suppression(settings.noise_suppression);
         if previous.monitor_playlist != settings.monitor_playlist {
             st.sync_monitor();
         }
@@ -1020,6 +1017,11 @@ pub async fn player_set_options(state: State<'_, AppState>, auto_advance: bool, 
 #[tauri::command]
 pub fn get_lame_notice() -> String {
     include_str!("../../crates/streamy-lame/lame_notice.txt").to_string()
+}
+
+#[tauri::command]
+pub fn get_update_status(tracker: State<'_, crate::updater::UpdateTracker>) -> crate::updater::UpdateStatus {
+    tracker.status()
 }
 
 #[tauri::command]

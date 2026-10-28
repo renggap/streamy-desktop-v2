@@ -129,7 +129,15 @@ export interface AppSettings {
   player_volume: number;
   auto_advance: boolean;
   repeat: boolean;
+  noise_suppression: NoiseSuppression;
+  record_bitrate_kbps: number;
+  record_mono: boolean;
 }
+
+export type NoiseSuppression = "off" | "low" | "medium" | "high";
+
+/** Recording bitrates the backend accepts (MP3, 44.1 kHz). */
+export const RECORD_BITRATES = [64, 96, 128, 192, 256, 320] as const;
 
 export interface AudioDeviceDesc {
   name: string;
@@ -149,3 +157,10 @@ export interface AppInfo {
 }
 
 export type Page = "studio" | "servers" | "settings";
+
+/** Background auto-update progress (src-tauri/src/updater.rs). */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "downloading"; version: string; percent: number | null }
+  | { state: "ready"; version: string }
+  | { state: "installing"; version: string };

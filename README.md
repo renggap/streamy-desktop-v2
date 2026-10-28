@@ -1,6 +1,6 @@
 # Streamy Desktop v2
 
-Windows desktop app (Tauri 2 + Rust + Svelte 5) that streams the microphone or a local-file playlist (switchable live) to SHOUTcast v2 (DNAS2) and Icecast servers over Ultravox 2.1 or ICE/1.0, plus a standalone MP3 recorder. Faithfully ported from Streamy Android.
+Windows desktop app (Tauri 2 + Rust + Svelte 5) that streams the microphone (with RNNoise noise suppression) or a local-file playlist (switchable live) to SHOUTcast v2 (DNAS2) and Icecast servers over Ultravox 2.1 or ICE/1.0, plus an MP3 recorder with its own quality setting. Updates itself silently from GitHub Releases. Faithfully ported from Streamy Android.
 
 ## Hard Rules & Principles
 
@@ -21,13 +21,14 @@ streamy-desktop-v2/
       src/core/                    XTEA, Ultravox framing, ADTS, WireSafety, AudioConfigRules,
                                    DjProtocol, backoff ladder, LevelTap, TeardownState
       src/net/                     UvoxClient, IcecastSourceClient, StreamTransport
-      src/audio/                   AudioSource trait, pipeline, rubato resample, stream sinks,
-                                   symphonia file decoder, playlist player, mic/playlist switch
+      src/audio/                   AudioSource trait, pipeline, rubato resample, stream sinks
+                                   (pass-through or re-encoding), symphonia file decoder, playlist
+                                   player, mic/playlist switch, RNNoise mic processor (nnnoiseless)
       src/session/                 stream_session, record_session
       tests/                       Golden vector unit tests, mock servers, session lifecycle
     streamy-lame/                  Vendored LAME 3.100 (encoder-only) + safe Rust FFI wrapper
   src-tauri/                       Windows desktop shell
-    src/audio_cpal.rs              WASAPI AudioSource via cpal with rubato resampling
+    src/audio_cpal.rs              WASAPI AudioSource via cpal: noise suppression + rubato resampling
     src/audio_out.rs               Speaker monitoring of the playlist (cpal output)
     src/power.rs                   SetThreadExecutionState sleep inhibitor
     src/secrets.rs                 Windows Credential Manager via keyring
@@ -36,12 +37,13 @@ streamy-desktop-v2/
     src/events.rs                  Tauri UI event emitters
     src/tray.rs                    System tray menu & window minimize-to-tray
     src/logging.rs                 Tracing rolling file logger with credential redaction
+    src/updater.rs                 Background auto-update from GitHub Releases (installs when idle)
   src/                             Svelte 5 + Vite + TypeScript + Tailwind v4 UI (JokoUI style: light, dark accent)
     src/i18n/                      Strict 1:1 translation dictionaries (en, id)
     src/lib/store.svelte.ts        Single app store: status polling + events, actions, toasts
     src/lib/errors.ts              Maps backend error codes/messages to friendly, translated text
     src/lib/components/            Sidebar, on-air hero, source switch, playlist, mic, servers, settings
-  scripts/                         LAME build & relinking scripts (PowerShell, .mjs, bash)
+  scripts/                         LAME build & relinking scripts, release.mjs (version bump + tag)
   docs/                            Design documentation & porting roadmap
 ```
 
@@ -80,6 +82,15 @@ npm run tauri build
 ```
 Generates a per-user NSIS installer in `src-tauri/target/release/bundle/nsis/` bundling the app, `lame_enc.dll`, and WebView2 bootstrapper.
 
+### 5. Publish a release (auto-update)
+```bash
+npm run release -- 2.1
+git push origin HEAD v2.1
+```
+Versions are `major.minor` (shown as `v2.1` in the sidebar; stored as `2.1.0`). The tag starts `.github/workflows/release.yml`, which builds, signs and publishes the installer plus `latest.json` as a GitHub Release. Installed apps check shortly after launch and every 6 hours, download in the background, and install quietly (then reopen) only when nothing is on air, recording, mic-testing or playing.
+
+Signing: the updater's public key is in `src-tauri/tauri.conf.json`. The private key must be in the repository secret `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one); never commit it. Losing it means installed apps can no longer verify updates.
+
 ---
 
 ## LGPL Relinking & Replacement
@@ -109,6 +120,9 @@ In compliance with the GNU LGPL v2.1 for LAME MP3 Encoder:
 | **12. Playlist** | Add MP3/WAV/FLAC/OGG/M4A files (Add files or drag onto the window), play, seek, reorder, remove. | Tracks show title and length; playback is heard in the speakers when *Hear in speakers* is on; auto-advance and repeat work; the queue survives a restart. |
 | **13. Source switch** | Go live on Microphone, switch to Playlist and back while live. | Switch is instant with no reconnect; listeners hear only the selected source; with *Send each track's title* on, each new track updates the title. |
 | **14. No mic** | Unplug the mic, select Playlist, go live. | Broadcast starts from the playlist; the Microphone tile shows it is unavailable; pausing the playlist sends silence instead of dropping the connection. |
+| **15. Noise suppression** | Run a fan near the mic, Test mic, switch Noise suppression Off → Low → Medium → High (also while live). | Fan noise drops at each step without clicks or dropouts; speech stays clear; the playlist is never processed. |
+| **16. Recording quality** | Set 320 kbps Stereo, go live on a 64 kbps mono server, Record. Then set it to match the server and record again. | First file is 320 kbps stereo 44.1 kHz; the second is the broadcast's own frames (64 kbps mono). Standalone recordings use the setting too. |
+| **17. Auto-update** | Install an older release, publish a newer tag, launch and leave the app idle. | Sidebar shows "Downloading v… · n%", then "Updating to v…"; the app closes and reopens on the new version with settings, servers and playlist intact. While on air it waits ("v… ready"). |
 
 ---
 

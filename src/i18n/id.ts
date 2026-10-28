@@ -219,6 +219,26 @@ export const id: Record<TranslationKey, string> = {
   errTrackMissing: "Lagu itu sudah tidak ada di playlist.",
   errUnsupportedFile: "Jenis berkas ini tidak didukung atau berkasnya rusak.",
 
+  // Noise suppression & recording quality
+  noiseLabel: "Peredam bising",
+  noiseOff: "Mati",
+  noiseLow: "Rendah",
+  noiseMedium: "Sedang",
+  noiseHigh: "Tinggi",
+  noiseHint: "Menghilangkan suara kipas, dengung, dan bising ruangan dari mikrofon (bukan playlist). Perubahan langsung berlaku, termasuk saat siaran.",
+  recordQualityLabel: "Kualitas rekaman",
+  recordChannelsLabel: "Kanal rekaman",
+  channelsMono: "Mono",
+  channelsStereo: "Stereo",
+  recordQualityHint: "MP3 44,1 kHz, dipakai untuk semua rekaman, saat siaran maupun tidak. Rekaman tidak bisa lebih detail daripada sample rate siaran.",
+  recordQualityLocked: "Perubahan kualitas berlaku untuk rekaman berikutnya.",
+
+  // Updates
+  updateDownloading: "Mengunduh {version}{percent}",
+  updateReady: "{version} siap",
+  updateInstalling: "Memperbarui ke {version}…",
+  updateHint: "Pembaruan terpasang otomatis saat tidak sedang siaran, merekam, atau memutar, lalu aplikasi dibuka kembali.",
+
   // Errors
   errNoProfile: "Pilih atau tambahkan server terlebih dahulu.",
   errProfileMissing: "Server tersebut sudah tidak ada. Pilih yang lain.",

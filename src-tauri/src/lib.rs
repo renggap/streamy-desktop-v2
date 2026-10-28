@@ -7,6 +7,7 @@ pub mod power;
 pub mod secrets;
 pub mod storage;
 pub mod tray;
+pub mod updater;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -135,6 +136,7 @@ pub fn run() {
     };
     // Saved gain applies from the first capture, not only after the slider moves.
     app_state.set_gain(initial_settings.mic_gain);
+    app_state.input.set_noise_suppression(initial_settings.noise_suppression);
     app_state.restore_player(&initial_settings);
 
     // Player events arrive on its audio clock thread; handle them (file writes,
@@ -161,7 +163,9 @@ pub fn run() {
             Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
+        .manage(updater::UpdateTracker::default())
         .setup(move |app| {
             *app_handle_holder.lock() = Some(app.handle().clone());
             if let Err(e) = tray::setup_tray(app.handle()) {
@@ -175,6 +179,7 @@ pub fn run() {
             if !initial_settings.start_minimized {
                 tray::show_main_window(app.handle());
             }
+            updater::spawn(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -220,6 +225,7 @@ pub fn run() {
             commands::clear_all_profiles,
             commands::get_lame_notice,
             commands::get_app_info,
+            commands::get_update_status,
             commands::open_log_folder,
             commands::open_recordings_folder,
             commands::set_input_source,
