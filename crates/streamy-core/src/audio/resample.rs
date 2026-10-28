@@ -54,6 +54,31 @@ impl CaptureConverter {
     }
 
     pub fn process(&mut self, input: &[f32]) -> Vec<i16> {
+        let planar = self.process_planar(input);
+        let frames = planar.first().map_or(0, |c| c.len());
+        let mut out = Vec::with_capacity(frames * self.out_channels);
+        for f in 0..frames {
+            for c in &planar {
+                out.push(f32_sample_to_i16(c[f]));
+            }
+        }
+        out
+    }
+
+    /// Same as `process`, but keeps float samples (for playback and mixing).
+    pub fn process_f32(&mut self, input: &[f32]) -> Vec<f32> {
+        let planar = self.process_planar(input);
+        let frames = planar.first().map_or(0, |c| c.len());
+        let mut out = Vec::with_capacity(frames * self.out_channels);
+        for f in 0..frames {
+            for c in &planar {
+                out.push(c[f]);
+            }
+        }
+        out
+    }
+
+    fn process_planar(&mut self, input: &[f32]) -> Vec<Vec<f32>> {
         // 1) Channel map into planar buffers (downmix = average, upmix = duplicate).
         let in_ch = self.in_channels;
         for frame in input.chunks_exact(in_ch) {
@@ -69,7 +94,7 @@ impl CaptureConverter {
         }
 
         // 2) Resample whole chunks; leftovers wait for the next callback.
-        let planar: Vec<Vec<f32>> = match &mut self.resampler {
+        match &mut self.resampler {
             None => self.pending.iter_mut().map(std::mem::take).collect(),
             Some(r) => {
                 let mut out = vec![Vec::new(); self.out_channels];
@@ -90,17 +115,7 @@ impl CaptureConverter {
                 }
                 out
             }
-        };
-
-        // 3) Interleave + quantize.
-        let frames = planar.first().map_or(0, |c| c.len());
-        let mut out = Vec::with_capacity(frames * self.out_channels);
-        for f in 0..frames {
-            for c in &planar {
-                out.push(f32_sample_to_i16(c[f]));
-            }
         }
-        out
     }
 }
 

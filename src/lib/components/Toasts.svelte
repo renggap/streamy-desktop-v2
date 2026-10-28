@@ -30,27 +30,28 @@
   .toasts {
     position: fixed;
     left: 12px;
-    right: 12px;
-    bottom: 12px;
+    right: 16px;
+    bottom: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     z-index: 100;
     pointer-events: none;
-    align-items: center;
+    align-items: flex-end;
   }
   .toast {
     pointer-events: auto;
     width: 100%;
-    max-width: 480px;
+    max-width: 420px;
     display: flex;
     align-items: flex-start;
     gap: 10px;
     padding: 10px 8px 10px 12px;
     border-radius: 10px;
-    background: var(--text);
-    color: var(--page);
-    box-shadow: var(--shadow-lg);
+    background: var(--color-gray-900);
+    color: var(--color-white);
+    border-radius: 14px;
+    box-shadow: 0 20px 40px -12px rgb(0 0 0 / 0.35);
     font-size: 13px;
   }
   .toast .btn {
@@ -61,7 +62,7 @@
     display: flex;
   }
   .success .icon {
-    color: var(--meter-green);
+    color: var(--color-lime-400);
   }
   .error .icon {
     color: var(--meter-red);

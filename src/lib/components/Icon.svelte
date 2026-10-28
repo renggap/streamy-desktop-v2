@@ -3,8 +3,11 @@
   type Name =
     | "mic" | "mic-off" | "radio" | "square" | "settings" | "server" | "plus" | "pencil"
     | "trash" | "folder" | "refresh" | "x" | "check" | "alert" | "info" | "record"
-    | "chevron-down" | "arrow-left" | "music" | "send";
+    | "chevron-down" | "arrow-left" | "music" | "send" | "play" | "pause" | "skip-back"
+    | "skip-forward" | "repeat" | "list-end" | "volume" | "headphones" | "arrow-up" | "arrow-down"
+    | "file-plus" | "layout" | "upload";
   let { name, size = 16 }: { name: Name; size?: number } = $props();
+  const FILLED = new Set<Name>(["record", "play", "pause", "skip-back", "skip-forward"]);
 
   const paths: Record<Name, string> = {
     mic: "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3",
@@ -27,6 +30,19 @@
     "arrow-left": "M19 12H5 M12 19l-7-7 7-7",
     music: "M9 18V5l12-2v13 M6 18m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0 M18 16m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
     send: "m22 2-7 20-4-9-9-4Z M22 2 11 13",
+    play: "M6 4l14 8-14 8Z",
+    pause: "M7 4h3v16H7z M14 4h3v16h-3z",
+    "skip-back": "M19 20 9 12l10-8z M5 19V5",
+    "skip-forward": "m5 4 10 8-10 8z M19 5v14",
+    repeat: "m17 2 4 4-4 4 M3 11v-1a4 4 0 0 1 4-4h14 M7 22l-4-4 4-4 M21 13v1a4 4 0 0 1-4 4H3",
+    "list-end": "M16 12H3 M16 6H3 M10 18H3 M21 6v10a2 2 0 0 1-2 2h-5 M16 16l-2 2 2 2",
+    volume: "M11 5 6 9H2v6h4l5 4z M15.54 8.46a5 5 0 0 1 0 7.07 M19.07 4.93a10 10 0 0 1 0 14.14",
+    headphones: "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3",
+    "arrow-up": "m5 12 7-7 7 7 M12 19V5",
+    "arrow-down": "M12 5v14 M19 12l-7 7-7-7",
+    "file-plus": "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4 M9 15h6 M12 18v-6",
+    layout: "M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z",
+    upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
   };
 </script>
 
@@ -34,7 +50,7 @@
   width={size}
   height={size}
   viewBox="0 0 24 24"
-  fill={name === "record" ? "currentColor" : "none"}
+  fill={FILLED.has(name) ? "currentColor" : "none"}
   stroke="currentColor"
   stroke-width="2"
   stroke-linecap="round"

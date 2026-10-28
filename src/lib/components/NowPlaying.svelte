@@ -20,7 +20,10 @@
 </script>
 
 <section class="card">
-  <h2 class="card-title">{t("nowPlayingTitle")}</h2>
+  <div>
+    <h2 class="card-title">{t("nowPlayingTitle")}</h2>
+    <p class="card-sub">{store.input === "playlist" && store.settings.send_track_titles ? t("nowPlayingAuto") : t("nowPlayingSub")}</p>
+  </div>
   <form class="row" onsubmit={submit}>
     <input
       class="input grow"
@@ -29,13 +32,13 @@
       placeholder={t("nowPlayingPlaceholder")}
       aria-label={t("nowPlayingTitle")}
     />
-    <button class="btn" type="submit" disabled={!title.trim() || sending}>
+    <button class="btn btn-dark" type="submit" disabled={!title.trim() || sending}>
       {#if sending}<span class="spinner"></span>{:else}<Icon name="send" size={14} />{/if}
       {t("btnSendTitle")}
     </button>
   </form>
   {#if current}
-    <p class="hint truncate" title={current}>
+    <p class="hint flex items-center gap-1.5 truncate" title={current}>
       <Icon name="music" size={12} />
       {live ? t("nowPlayingCurrent", { title: current }) : t("nowPlayingQueued", { title: current })}
     </p>

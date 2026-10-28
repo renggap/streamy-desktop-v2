@@ -66,11 +66,51 @@ export interface RecordingStatus {
   error: string | null;
 }
 
+export type InputKind = "mic" | "playlist";
+export type PlayState = "Stopped" | "Playing" | "Paused";
+
+export interface Track {
+  id: number;
+  path: string;
+  title: string;
+  duration_secs: number | null;
+}
+
+export interface PlayerStatus {
+  state: PlayState;
+  current_id: number | null;
+  position_secs: number;
+  duration_secs: number | null;
+  volume: number;
+  auto_advance: boolean;
+  repeat: boolean;
+}
+
+export interface PlayerSnapshot {
+  status: PlayerStatus;
+  tracks: Track[];
+}
+
+export interface AddResult {
+  added: Track[];
+  /** [path, reason] */
+  failed: [string, string][];
+}
+
+export interface PlayerErrorPayload {
+  title: string;
+  reason: string;
+}
+
 export interface AppStatus {
   stream: StreamState;
   stats: StreamStats;
   recording: RecordingStatus;
   mic_test: boolean;
+  input: InputKind;
+  /** False when the running broadcast/recording could not open the mic. */
+  mic_available: boolean;
+  player: PlayerStatus;
 }
 
 export interface AppSettings {
@@ -83,6 +123,12 @@ export interface AppSettings {
   start_minimized: boolean;
   auto_reconnect: boolean;
   record_with_stream: boolean;
+  input_source: InputKind;
+  monitor_playlist: boolean;
+  send_track_titles: boolean;
+  player_volume: number;
+  auto_advance: boolean;
+  repeat: boolean;
 }
 
 export interface AudioDeviceDesc {
@@ -101,3 +147,5 @@ export interface AppInfo {
   log_dir: string;
   recordings_dir: string;
 }
+
+export type Page = "studio" | "servers" | "settings";

@@ -58,8 +58,8 @@
   .track {
     position: relative;
     flex: 1;
-    height: 16px;
-    border-radius: 4px;
+    height: 14px;
+    border-radius: 999px;
     background: var(--meter-bg);
     overflow: hidden;
   }
@@ -99,9 +99,9 @@
     font-size: 10px;
     font-weight: 800;
     padding: 2px 5px;
-    border-radius: 4px;
-    color: var(--text-dim);
-    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--color-gray-400);
+    border: 1px solid var(--color-gray-200);
     width: 38px;
     text-align: center;
   }
@@ -115,7 +115,7 @@
     height: 14px;
     margin-right: 46px;
     font-size: 10px;
-    color: var(--text-dim);
+    color: var(--color-gray-400);
     font-family: var(--font-mono);
   }
   .scale span {

@@ -258,7 +258,7 @@
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--text-muted);
+    color: var(--color-gray-500);
     margin-bottom: 8px;
   }
   summary {
