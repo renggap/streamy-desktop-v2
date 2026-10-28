@@ -1,6 +1,6 @@
 [package]
 name = "streamy-desktop"
-version = "2.0.0"
+version = "2.1.0"
 description = "Streamy Desktop Windows App"
 authors = ["Streamy Authors"]
 edition = "2021"
