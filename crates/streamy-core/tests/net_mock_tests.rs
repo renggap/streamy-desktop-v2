@@ -138,7 +138,7 @@ fn test_uvox_client_handshake_send_metadata_and_close() {
 }
 
 #[test]
-fn test_icecast_client_handshake_and_icy_metadata_interleaving() {
+fn test_icecast_client_sends_audio_verbatim_and_title_via_admin() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind mock listener");
     let addr = listener.local_addr().unwrap();
 
@@ -149,7 +149,7 @@ fn test_icecast_client_handshake_and_icy_metadata_interleaving() {
         // Read HTTP request headers
         let mut req_header = Vec::new();
         let mut buf = [0u8; 1];
-        while let Ok(_) = stream.read_exact(&mut buf) {
+        while stream.read_exact(&mut buf).is_ok() {
             req_header.push(buf[0]);
             if req_header.ends_with(b"\r\n\r\n") {
                 break;
@@ -157,32 +157,40 @@ fn test_icecast_client_handshake_and_icy_metadata_interleaving() {
         }
         let req_str = String::from_utf8_lossy(&req_header);
         assert!(req_str.starts_with("SOURCE /live ICE/1.0"));
-        assert!(req_str.contains("icy-metaint: 8192"));
+        assert!(req_str.contains("Authorization: Basic"));
+        assert!(req_str.contains("ice-name: Station Name"));
+        // A source stream must not advertise inline metadata: harbor would
+        // relay the metadata blocks to listeners as audio.
+        assert!(!req_str.contains("icy-metaint"));
 
-        // Respond with HTTP 200 OK
         stream.write_all(b"HTTP/1.0 200 OK\r\n\r\n").expect("write 200 OK");
         stream.flush().unwrap();
 
-        // Read 8192 audio bytes
+        // Audio arrives byte-for-byte, with nothing spliced in.
         let mut audio_buf = vec![0u8; 8192];
         stream.read_exact(&mut audio_buf).expect("read 8192 audio bytes");
+        assert!(audio_buf.iter().all(|&b| b == 0xAA));
 
-        // Next byte must be the metadata length byte
-        let mut len_byte = [0u8; 1];
-        stream.read_exact(&mut len_byte).expect("read length byte");
-        let meta_len = (len_byte[0] as usize) * 16;
-        assert!(meta_len > 0);
-
-        let mut meta_block = vec![0u8; meta_len];
-        stream.read_exact(&mut meta_block).expect("read metadata block");
-        let meta_str = String::from_utf8_lossy(&meta_block);
-        assert!(meta_str.starts_with("StreamTitle='Icecast Test Title';"));
+        // The title goes out-of-band on a second connection.
+        let (mut admin, _) = listener.accept().expect("admin accept failed");
+        admin.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut req = Vec::new();
+        while admin.read_exact(&mut buf).is_ok() {
+            req.push(buf[0]);
+            if req.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let req = String::from_utf8_lossy(&req);
+        assert!(req.starts_with("GET /admin/metadata?mode=updinfo"), "{req}");
+        assert!(req.contains("mount=%2Flive&song=Icecast%20Test%20Title"), "{req}");
+        admin.write_all(b"HTTP/1.0 200 OK\r\n\r\n").unwrap();
     });
 
     let mut client = IcecastSourceClient::new(
         addr.ip().to_string(),
         addr.port(),
-        "/live".to_string(),
+        "live".to_string(),
         "source".to_string(),
         "hackme".to_string(),
         "audio/mpeg".to_string(),
@@ -192,14 +200,13 @@ fn test_icecast_client_handshake_and_icy_metadata_interleaving() {
         .connect(128, "Station Name", "Talk")
         .expect("Icecast connect failed");
 
+    let audio = vec![0xAA; 8192];
+    client.send(&audio).expect("Send audio failed");
+
     client
         .update_now_playing("Icecast Test Title")
         .expect("Update now playing failed");
 
-    // Send 8192 bytes of audio to trigger ICY metadata block injection
-    let audio = vec![0xAA; 8192];
-    client.send(&audio).expect("Send audio failed");
-
-    client.close();
     server_thread.join().expect("Server thread panicked");
+    client.close();
 }

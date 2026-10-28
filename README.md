@@ -36,7 +36,9 @@ streamy-desktop-v2/
     src/logging.rs                 Tracing rolling file logger with credential redaction
   src/                             Svelte 5 + Vite + TypeScript UI (Hallmark console palette)
     src/i18n/                      Strict 1:1 translation dictionaries (en, id)
-    src/lib/components/            Svelte 5 runes components (VU meter, hero, profiles, etc.)
+    src/lib/store.svelte.ts        Single app store: status polling + events, actions, toasts
+    src/lib/errors.ts              Maps backend error codes/messages to friendly, translated text
+    src/lib/components/            Svelte 5 components (on-air panel, meter, servers, settings)
   scripts/                         LAME build & relinking scripts (PowerShell, .mjs, bash)
   docs/                            Design documentation & porting roadmap
 ```
@@ -91,16 +93,17 @@ In compliance with the GNU LGPL v2.1 for LAME MP3 Encoder:
 
 | Test Case | Procedure | Expected Result |
 | :--- | :--- | :--- |
-| **1. Virtual & Real Mic** | Select input device in Microphone card. Speak into mic. | VU meter displays live RMS dBFS level, peak-hold tick, green/yellow/red gradient. |
-| **2. Broadcast to DNAS2** | Select SHOUTcast v2 profile, click **Start Broadcast**. | Status changes Ready → Connecting → On Air with pulsing green dot. Duration and bytes sent increment. |
-| **3. Mid-Stream Song Title** | Enter track title & artist in Now Playing card, click **Update Title**. | Displays "Title Updated!" banner. In-stream `0x902` XML metadata pushed over Ultravox. |
-| **4. Server Kill & Reconnect** | Stop/kill the remote streaming server while broadcasting. | Status changes to **Reconnecting (1)** with backoff ladder (1s, 2s, 5s...). Resumes On Air when server restarts. |
-| **5. Stop Mid-Backoff** | Click **Stop Broadcast** during reconnect backoff. | Broadcast immediately halts and reverts to Ready. No reconnection attempts occur. |
-| **6. Concurrent Stream + Record** | Enable **Auto-record whenever broadcast starts** or click **Record**. | Both broadcast and standalone recording run simultaneously without audio stutter or frame drops. |
-| **7. Close to System Tray** | Click window close button (X). | Window hides to system tray; broadcast continues uninterrupted. Double-clicking tray icon restores window. |
-| **8. Sleep Inhibition** | Broadcast for 30 minutes with display sleep enabled. | System remains awake; broadcast does not sleep or drop connection. |
-| **9. Credential Storage** | Save profile with password; restart app. | Profile password saved securely in Windows Credential Manager. Deleting profile deletes credential. |
-| **10. Language Switch** | Click flag icon in masthead (🇬🇧 EN / 🇮🇩 ID). | Instant UI language switch between English and Indonesian across all cards and dialogs. |
+| **1. Mic check** | Pick the input device in the Microphone card, click **Test mic**, speak. | Meter shows live level on a −60…0 dB scale with peak hold; CLIP lights above −0.5 dBFS. Gain slider (−30…+12 dB) and Mute take effect immediately. |
+| **2. Broadcast to DNAS 2** | Add a *SHOUTcast source* server, click **Go live**. | Status pill goes Off air → Connecting → On air; time and bytes sent count up. A wrong password shows a plain-language error with Retry and Details. |
+| **3. AzuraCast DJ** | Add a *DJ / streamer* server with *AzuraCast / Icecast*, DJ user, password, DJ port 8005, mount `/`. | Goes live; listeners hear the stream. |
+| **4. Now playing** | Type a title in Now playing, press Enter (before or while live). | Before going live: queued and sent on connect. While live: "Title updated for listeners." |
+| **5. Server kill & reconnect** | Stop the server while live. | Pill shows **Reconnecting (attempt n)** and a hint; resumes On air when the server returns. |
+| **6. Stop mid-backoff** | Click **Cancel** while reconnecting. | Stops at once and returns to Off air; no further attempts. |
+| **7. Record** | Click **Record** idle (mic-only file) and while live (records the broadcast), or tick *Record every broadcast automatically*. | MP3 lands in the recordings folder; timer and size update; Open folder works. |
+| **8. Close to tray** | Close the window while live or recording. | Window hides; broadcast continues; tray tooltip shows the state; left-click restores. Closing while idle quits. |
+| **9. Sleep inhibition** | Broadcast for 30 minutes with sleep enabled. | The PC stays awake until the broadcast and recording both stop. |
+| **10. Credentials** | Save a server with a password, restart. | Password lives in Credential Manager; the editor shows "Saved · leave empty to keep"; deleting the server removes it. |
+| **11. Language** | Settings › General › Bahasa Indonesia. | Every card and dialog switches language instantly, no reload. |
 
 ---
 

@@ -13,23 +13,28 @@ use tracing_subscriber::{fmt, EnvFilter};
 pub fn redact_credentials(msg: &str) -> String {
     // Redact Basic auth
     let mut out = msg.to_string();
-    if let Some(idx) = out.find("Basic ") {
-        let rest = &out[idx + 6..];
+    let mut search_from = 0;
+    while let Some(rel) = out[search_from..].find("Basic ") {
+        let start = search_from + rel + 6;
+        let rest = &out[start..];
         let end = rest.find(|c: char| c.is_whitespace() || c == '"' || c == '\'').unwrap_or(rest.len());
-        if !rest.starts_with("[REDACTED]") {
-            out.replace_range(idx + 6..idx + 6 + end, "[REDACTED]");
+        if end > 0 && !rest.starts_with("[REDACTED]") {
+            out.replace_range(start..start + end, "[REDACTED]");
         }
+        search_from = start;
     }
 
     // Redact password="..." or password: "..."
     let patterns = ["password=", "password:", "password\": \"", "passwd=", "pwd="];
     for pat in patterns {
         let mut search_from = 0;
-        while let Some(rel_idx) = out[search_from..].to_lowercase().find(pat) {
+        // ASCII-only lowercasing keeps byte offsets aligned with `out`; Unicode
+        // lowercasing can change lengths ('İ') and slice mid-char -> panic.
+        while let Some(rel_idx) = out[search_from..].to_ascii_lowercase().find(pat) {
             let idx = search_from + rel_idx;
             let start = idx + pat.len();
             let rest = &out[start..];
-            let end = rest.find(|c: char| c == ',' || c == '}' || c == '&' || c == '"' || c == '\n' || c == '\r').unwrap_or(rest.len());
+            let end = rest.find([',', '}', '&', '"', '\n', '\r']).unwrap_or(rest.len());
             if end > 0 {
                 out.replace_range(start..start + end, "[REDACTED]");
                 search_from = start + "[REDACTED]".len();
@@ -117,5 +122,15 @@ mod tests {
         let redacted2 = redact_credentials(line2);
         assert!(!redacted2.contains("SuperSecretPassword123"));
         assert!(redacted2.contains("password=[REDACTED]"));
+    }
+
+    #[test]
+    fn redaction_survives_non_ascii_text() {
+        // 'İ' lowercases to 3 bytes; byte offsets must not drift.
+        let line = "İİİ profile Şiir Radyo password=gizli&x=1 Basic abc==";
+        let r = redact_credentials(line);
+        assert!(!r.contains("gizli"));
+        assert!(!r.contains("abc=="));
+        assert!(r.starts_with("İİİ profile Şiir Radyo"));
     }
 }

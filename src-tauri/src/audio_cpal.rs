@@ -1,14 +1,18 @@
 //! cpal WASAPI implementation of AudioSource for Windows.
-//! Handles mix formats (f32/i16), channel downmix/upmix, rubato resampling, and mic_denied privacy handling.
+//! Accepts any common device sample format, then downmix/upmix + rubato
+//! resampling to the encoder's format via `CaptureConverter`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
+use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use serde::{Deserialize, Serialize};
 
-use streamy_core::audio::resample::{f32_to_i16, mono_to_stereo_i16, stereo_to_mono_i16, AudioResampler};
-use streamy_core::audio::source::AudioSource;
+use streamy_core::audio::resample::CaptureConverter;
+use streamy_core::audio::source::{AudioSource, FrameCallback};
+
+/// Frames handed to the pipeline per call (~23 ms at 44.1 kHz).
+const EMIT_FRAMES: usize = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioDeviceDesc {
@@ -51,6 +55,20 @@ impl CpalAudioSource {
         }
         out
     }
+
+    fn find_device(&self, host: &cpal::Host) -> Result<cpal::Device, String> {
+        if let Some(name) = &self.device_name {
+            if let Ok(mut devices) = host.input_devices() {
+                if let Some(d) = devices.find(|d| d.name().map(|n| n == *name).unwrap_or(false)) {
+                    return Ok(d);
+                }
+            }
+            // Device names change when a USB mic moves ports; the default
+            // device beats refusing to go on air.
+            tracing::warn!("input device {name:?} not found, using the default device");
+        }
+        host.default_input_device().ok_or_else(|| "mic_not_found".to_string())
+    }
 }
 
 // cpal::Stream contains platform-specific pointers that are marked !Send / !Sync on some platforms (e.g. ALSA).
@@ -58,148 +76,112 @@ impl CpalAudioSource {
 unsafe impl Send for CpalAudioSource {}
 unsafe impl Sync for CpalAudioSource {}
 
+fn map_device_error(context: &str, e: impl std::fmt::Display) -> String {
+    let msg = e.to_string();
+    let lower = msg.to_lowercase();
+    if lower.contains("access") || lower.contains("denied") || lower.contains("permission") {
+        "mic_denied".to_string()
+    } else if lower.contains("not available") || lower.contains("no longer") {
+        "mic_not_found".to_string()
+    } else {
+        format!("{context}: {msg}")
+    }
+}
+
+fn build_stream<T>(
+    device: &cpal::Device,
+    config: &StreamConfig,
+    mut converter: CaptureConverter,
+    out_channels: usize,
+    running: Arc<AtomicBool>,
+    mut on_frame: FrameCallback,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: SizedSample + Send + 'static,
+    f32: FromSample<T>,
+{
+    let mut scratch: Vec<f32> = Vec::new();
+    let mut buffer: Vec<i16> = Vec::new();
+    let slice = EMIT_FRAMES * out_channels;
+
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            if !running.load(Ordering::SeqCst) {
+                return;
+            }
+            scratch.clear();
+            scratch.extend(data.iter().map(|s| s.to_sample::<f32>()));
+            buffer.extend(converter.process(&scratch));
+            while buffer.len() >= slice {
+                let keep_going = on_frame(&buffer[..slice]);
+                buffer.drain(..slice);
+                if !keep_going {
+                    running.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+        },
+        // Device loss mostly shows up as silence (no callbacks), which the
+        // pipeline watchdog turns into `mic_lost`; log the cause here.
+        |err: cpal::StreamError| tracing::error!("audio capture error: {err}"),
+        None,
+    )
+}
+
 impl AudioSource for CpalAudioSource {
-    fn start(&mut self, mut on_frame: Box<dyn FnMut(&[i16]) -> bool + Send>) -> Result<(), String> {
+    fn start(&mut self, on_frame: FrameCallback) -> Result<(), String> {
         self.stop();
 
         let host = cpal::default_host();
-        let device = match &self.device_name {
-            Some(name) => {
-                let mut found = None;
-                if let Ok(devices) = host.input_devices() {
-                    for d in devices {
-                        if d.name().map(|n| n == *name).unwrap_or(false) {
-                            found = Some(d);
-                            break;
-                        }
-                    }
-                }
-                found.or_else(|| host.default_input_device())
-            }
-            None => host.default_input_device(),
-        };
-
-        let device = device.ok_or_else(|| "mic_denied".to_string())?;
+        let device = self.find_device(&host)?;
+        if let Ok(name) = device.name() {
+            tracing::info!("capturing from {name:?}");
+        }
 
         let default_cfg = device
             .default_input_config()
-            .map_err(|e| {
-                let err_str = e.to_string().to_lowercase();
-                if err_str.contains("access") || err_str.contains("denied") || err_str.contains("permission") {
-                    "mic_denied".to_string()
-                } else {
-                    format!("Failed to get default input config: {:?}", e)
-                }
-            })?;
+            .map_err(|e| map_device_error("Cannot read microphone format", e))?;
 
         let sample_format = default_cfg.sample_format();
         let config: StreamConfig = default_cfg.into();
 
         let in_rate = config.sample_rate.0;
         let in_channels = config.channels as usize;
-        let target_rate = self.target_sample_rate;
-        let target_mono = self.target_mono;
-        let target_channels = if target_mono { 1 } else { 2 };
-
-        let mut resampler = AudioResampler::new(in_rate, target_rate, in_channels)
-            .map_err(|e| format!("Resampler error: {:?}", e))?;
+        let out_channels = if self.target_mono { 1 } else { 2 };
+        let converter = CaptureConverter::new(in_rate, in_channels, self.target_sample_rate, out_channels)?;
 
         self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();
 
-        let err_fn = move |err: cpal::StreamError| {
-            tracing::error!("CPAL audio capture error: {:?}", err);
-        };
-
+        macro_rules! build {
+            ($t:ty) => {
+                build_stream::<$t>(&device, &config, converter, out_channels, running, on_frame)
+            };
+        }
         let stream = match sample_format {
-            SampleFormat::F32 => {
-                let mut buffer_pcm: Vec<i16> = Vec::new();
-
-                device.build_input_stream(
-                    &config,
-                    move |data: &[f32], _| {
-                        if !running.load(Ordering::SeqCst) {
-                            return;
-                        }
-
-                        // 1) Resample if needed
-                        let resampled_f32 = match resampler.process_interleaved_f32(data) {
-                            Ok(r) => r,
-                            Err(_) => data.to_vec(),
-                        };
-
-                        // 2) Convert f32 to i16
-                        let mut pcm16 = f32_to_i16(&resampled_f32);
-
-                        // 3) Channel conversion (match target_channels)
-                        if in_channels == 1 && target_channels == 2 {
-                            pcm16 = mono_to_stereo_i16(&pcm16);
-                        } else if in_channels >= 2 && target_channels == 1 {
-                            pcm16 = stereo_to_mono_i16(&pcm16);
-                        }
-
-                        // 4) Emit in ~1024 frame slices
-                        buffer_pcm.extend(pcm16);
-                        let slice_size = 1024 * target_channels;
-                        while buffer_pcm.len() >= slice_size {
-                            let chunk: Vec<i16> = buffer_pcm.drain(..slice_size).collect();
-                            if !on_frame(&chunk) {
-                                running.store(false, Ordering::SeqCst);
-                                break;
-                            }
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
+            SampleFormat::F32 => build!(f32),
+            SampleFormat::F64 => build!(f64),
+            SampleFormat::I16 => build!(i16),
+            SampleFormat::I32 => build!(i32),
+            SampleFormat::I8 => build!(i8),
+            SampleFormat::U16 => build!(u16),
+            SampleFormat::U8 => build!(u8),
+            SampleFormat::U32 => build!(u32),
+            other => {
+                self.running.store(false, Ordering::SeqCst);
+                return Err(format!("Unsupported microphone sample format: {other}"));
             }
-            SampleFormat::I16 => {
-                let mut buffer_pcm: Vec<i16> = Vec::new();
-
-                device.build_input_stream(
-                    &config,
-                    move |data: &[i16], _| {
-                        if !running.load(Ordering::SeqCst) {
-                            return;
-                        }
-
-                        let mut pcm16 = data.to_vec();
-
-                        // Channel conversion
-                        if in_channels == 1 && target_channels == 2 {
-                            pcm16 = mono_to_stereo_i16(&pcm16);
-                        } else if in_channels >= 2 && target_channels == 1 {
-                            pcm16 = stereo_to_mono_i16(&pcm16);
-                        }
-
-                        buffer_pcm.extend(pcm16);
-                        let slice_size = 1024 * target_channels;
-                        while buffer_pcm.len() >= slice_size {
-                            let chunk: Vec<i16> = buffer_pcm.drain(..slice_size).collect();
-                            if !on_frame(&chunk) {
-                                running.store(false, Ordering::SeqCst);
-                                break;
-                            }
-                        }
-                    },
-                    err_fn,
-                    None,
-                )
-            }
-            _ => return Err("Unsupported CPAL sample format".to_string()),
         }
         .map_err(|e| {
-            let err_str = e.to_string().to_lowercase();
-            if err_str.contains("access") || err_str.contains("denied") || err_str.contains("permission") {
-                "mic_denied".to_string()
-            } else {
-                format!("Failed to build CPAL input stream: {:?}", e)
-            }
+            self.running.store(false, Ordering::SeqCst);
+            map_device_error("Cannot open microphone", e)
         })?;
 
-        stream
-            .play()
-            .map_err(|e| format!("Failed to play CPAL stream: {:?}", e))?;
+        stream.play().map_err(|e| {
+            self.running.store(false, Ordering::SeqCst);
+            map_device_error("Cannot start microphone", e)
+        })?;
 
         self.stream = Some(stream);
         Ok(())
@@ -209,6 +191,7 @@ impl AudioSource for CpalAudioSource {
         self.running.store(false, Ordering::SeqCst);
         if let Some(stream) = self.stream.take() {
             let _ = stream.pause();
+            // Dropping the stream releases the device.
         }
     }
 }

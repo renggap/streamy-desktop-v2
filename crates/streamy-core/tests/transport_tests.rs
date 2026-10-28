@@ -134,12 +134,12 @@ async fn test_transport_gives_up_after_max_attempts_and_emits_failed() {
         .filter(|s| matches!(s, TransportState::Backoff { .. }))
         .count();
     assert_eq!(backoff_count, 9);
-    assert_eq!(
-        states.last(),
-        Some(&TransportState::Failed {
-            reason: "gave_up after 10 attempts".to_string()
-        })
-    );
+    match states.last() {
+        Some(TransportState::Failed { reason }) => {
+            assert!(reason.starts_with("gave_up after 10 attempts"), "{reason}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
 }
 
 #[tokio::test]

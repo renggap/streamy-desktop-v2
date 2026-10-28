@@ -129,6 +129,7 @@ async fn test_automated_kill_server_backoff_restart_resume() {
         dj_port: None,
         dj_protocol: DjProtocol::ULTRAVOX,
         dj_mount: None,
+        ..Default::default()
     };
 
     let audio = Box::new(SineAudioSource::new(44_100, true, 1024));
@@ -200,6 +201,7 @@ async fn test_twenty_rapid_start_stop_cycles_no_leaks() {
             dj_port: None,
             dj_protocol: DjProtocol::ULTRAVOX,
             dj_mount: None,
+            ..Default::default()
         };
 
         let audio = Box::new(SineAudioSource::new(44_100, true, 1024));
@@ -234,7 +236,7 @@ async fn test_standalone_recorder_produces_valid_mp3() {
     };
 
     let audio = Box::new(SineAudioSource::new(44_100, true, 1024));
-    let path = recorder.start(config, tmp_path.clone(), audio).unwrap();
+    let path = recorder.start(config, tmp_path.clone(), audio, None).unwrap();
     assert!(matches!(recorder.state(), RecordState::Recording { .. }));
 
     // Record for 300 ms
@@ -253,4 +255,47 @@ async fn test_standalone_recorder_produces_valid_mp3() {
     assert_eq!(bytes[0], 0xFF);
     assert_eq!(bytes[1] & 0xE0, 0xE0);
     assert_eq!((bytes[1] >> 1) & 0x03, 0x01); // Layer III
+}
+
+#[tokio::test]
+async fn failed_connect_surfaces_error_and_releases_the_pipeline() {
+    let session = StreamSession::new(Arc::new(|_| {}));
+    // Nothing listens on port 1: with auto-reconnect off the first refusal is terminal.
+    let profile = StreamProfile {
+        name: "Fail".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: 1,
+        auto_reconnect: false,
+        ..Default::default()
+    };
+    let audio = Box::new(SineAudioSource::new(44_100, true, 1024));
+    session.start(profile, audio, None).unwrap();
+
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_secs(10) && session.is_active() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!session.is_active(), "failed session must tear itself down");
+    assert!(matches!(session.state(), StreamState::Error { .. }));
+
+    // A user stop afterwards clears the error.
+    session.stop_and_shutdown(false);
+    assert_eq!(session.state(), StreamState::Idle);
+}
+
+#[test]
+fn arming_a_recording_while_idle_leaves_no_file() {
+    let session = StreamSession::new(Arc::new(|_| {}));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("orphan.mp3");
+    assert!(session.arm_recording(path.to_string_lossy().to_string()).is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn now_playing_is_queued_until_live() {
+    let session = StreamSession::new(Arc::new(|_| {}));
+    assert_eq!(session.update_now_playing("  Morning Talk  "), Ok(false));
+    assert_eq!(session.now_playing().as_deref(), Some("Morning Talk"));
+    assert!(session.update_now_playing("   ").is_err());
 }

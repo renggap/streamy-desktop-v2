@@ -1,8 +1,10 @@
 //! AudioPipeline: glues AudioSource -> software gain -> LevelTap -> Mp3Encoder -> StreamTransport / StreamSink.
 //! Operates on the audio thread with lock-free/mutex-guarded frame boundaries.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use crate::audio::sink::StreamSink;
@@ -13,9 +15,15 @@ use streamy_lame::Mp3Encoder;
 
 const MIN_USEFUL_SAMPLES: usize = 160;
 const SHORT_READ_LIMIT: usize = 50; // ~1s of persistent short reads
+/// No audio callback for this long means the device vanished (unplugged,
+/// disabled, or grabbed exclusively by another app).
+const CAPTURE_STALL_MS: u64 = 4_000;
+const WATCHDOG_TICK_MS: u64 = 250;
 
 pub type LevelFeedFn = Arc<dyn Fn(LevelSnapshot) + Send + Sync>;
-pub type MicBusyFn = Arc<dyn Fn() + Send + Sync>;
+/// Called (off the audio thread) with a reason code when capture can't continue:
+/// `mic_busy` (persistent short reads) or `mic_lost` (callbacks stopped).
+pub type MicBusyFn = Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct AudioPipeline {
     capture: Box<dyn AudioSource>,
@@ -28,6 +36,8 @@ pub struct AudioPipeline {
     on_mic_busy: MicBusyFn,
     level_feed: Option<LevelFeedFn>,
     running: Arc<AtomicBool>,
+    capture_failed: Arc<AtomicBool>,
+    watchdog: Option<thread::JoinHandle<()>>,
 }
 
 impl AudioPipeline {
@@ -51,6 +61,8 @@ impl AudioPipeline {
             on_mic_busy,
             level_feed,
             running: Arc::new(AtomicBool::new(false)),
+            capture_failed: Arc::new(AtomicBool::new(false)),
+            watchdog: None,
         }
     }
 
@@ -69,11 +81,17 @@ impl AudioPipeline {
     }
 
     pub fn disarm_record(&self) {
+        // Drop a sink that was armed but never swapped in, too.
+        if let Some(mut s) = self.pending_sink.lock().take() {
+            s.flush();
+            s.close();
+        }
         self.stop_sink_requested.store(true, Ordering::SeqCst);
     }
 
     pub fn start(&mut self) -> Result<(), String> {
         self.running.store(true, Ordering::SeqCst);
+        self.capture_failed.store(false, Ordering::SeqCst);
         let encoder = self.encoder.clone();
         let transport = self.transport.clone();
         let active_sink = self.active_sink.clone();
@@ -83,6 +101,11 @@ impl AudioPipeline {
         let on_mic_busy = self.on_mic_busy.clone();
         let level_feed = self.level_feed.clone();
         let running = self.running.clone();
+        let capture_failed = self.capture_failed.clone();
+
+        let epoch = Instant::now();
+        let last_frame_ms = Arc::new(AtomicU64::new(0));
+        let last_frame_cb = last_frame_ms.clone();
 
         let mut consecutive_short_reads = 0;
 
@@ -90,6 +113,7 @@ impl AudioPipeline {
             if !running.load(Ordering::SeqCst) {
                 return false;
             }
+            last_frame_cb.store(epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
 
             // 1) Swap-in or disarm record sink at frame boundary
             {
@@ -118,8 +142,10 @@ impl AudioPipeline {
                 if consecutive_short_reads > SHORT_READ_LIMIT {
                     // Never tear down from the audio thread: stop() pauses the
                     // CPAL stream, which joins this very callback. Deadlock.
-                    let cb = on_mic_busy.clone();
-                    std::thread::spawn(move || cb());
+                    if !capture_failed.swap(true, Ordering::SeqCst) {
+                        let cb = on_mic_busy.clone();
+                        thread::spawn(move || cb("mic_busy".into()));
+                    }
                     return false;
                 }
             } else {
@@ -139,17 +165,17 @@ impl AudioPipeline {
             // 4) Pre-encoder LevelTap
             if let Some(ref feed) = level_feed {
                 let snapshot = LevelSnapshot {
-                    samples: LevelTap::decimate(&pcm, 96),
+                    samples: Vec::new(),
                     rms_db: LevelTap::rms_db(&pcm),
+                    peak_db: LevelTap::peak_db(&pcm),
                 };
                 feed(snapshot);
             }
 
             // 5) Encode frame with LAME
-            let mut enc = encoder.lock();
-            let frames = match enc.encode(&pcm) {
-                Ok(f) => f,
-                Err(_) => Vec::new(),
+            let frames = {
+                let mut enc = encoder.lock();
+                enc.encode(&pcm).unwrap_or_default()
             };
 
             // 6) Send to transport if streaming
@@ -169,12 +195,45 @@ impl AudioPipeline {
             }
 
             true
-        }))
+        }))?;
+
+        // Watchdog: a capture device that stops delivering callbacks (USB mic
+        // unplugged, device disabled) produces no error on most backends.
+        let running = self.running.clone();
+        let capture_failed = self.capture_failed.clone();
+        let on_mic_busy = self.on_mic_busy.clone();
+        self.watchdog = Some(
+            thread::Builder::new()
+                .name("streamy-capture-watchdog".into())
+                .spawn(move || {
+                    while running.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(WATCHDOG_TICK_MS));
+                        let now = epoch.elapsed().as_millis() as u64;
+                        let last = last_frame_ms.load(Ordering::Relaxed);
+                        if running.load(Ordering::SeqCst) && now.saturating_sub(last) > CAPTURE_STALL_MS {
+                            if !capture_failed.swap(true, Ordering::SeqCst) {
+                                let cb = on_mic_busy.clone();
+                                thread::spawn(move || cb("mic_lost".into()));
+                            }
+                            return;
+                        }
+                    }
+                })
+                .map_err(|e| format!("Failed to start capture watchdog: {e}"))?,
+        );
+        Ok(())
     }
 
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(w) = self.watchdog.take() {
+            let _ = w.join();
+        }
         self.capture.stop();
+
+        if self.encoder.lock().is_closed() {
+            return; // already stopped (Drop after an explicit stop)
+        }
 
         // Flush trailing frames from encoder
         let trailing = {
@@ -186,8 +245,9 @@ impl AudioPipeline {
             for f in &trailing {
                 t.enqueue(f.clone());
             }
-        } else {
-            // In record-only mode, trailing output belongs to the file
+        }
+        // Trailing output also completes the local recording, if any.
+        {
             let mut sink_guard = self.active_sink.lock();
             if let Some(ref mut s) = *sink_guard {
                 s.on_encoded(&trailing);

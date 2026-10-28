@@ -5,9 +5,10 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use parking_lot::Mutex;
 
-use crate::audio::pipeline::AudioPipeline;
+use crate::audio::pipeline::{AudioPipeline, LevelFeedFn};
 use crate::audio::sink::{Mp3DirectSink, StreamSink};
 use crate::audio::source::AudioSource;
 use crate::core::audio_config_rules::{AudioConfig, AudioConfigRules};
@@ -22,6 +23,7 @@ pub struct RecordSession {
     state_callback: RecordStateCallback,
     shutting_down: AtomicBool,
     recording_path: Mutex<Option<String>>,
+    started: Mutex<Option<Instant>>,
     mic_gain: Mutex<f32>,
 }
 
@@ -33,6 +35,7 @@ impl RecordSession {
             state_callback,
             shutting_down: AtomicBool::new(false),
             recording_path: Mutex::new(None),
+            started: Mutex::new(None),
             mic_gain: Mutex::new(1.0),
         })
     }
@@ -43,6 +46,16 @@ impl RecordSession {
 
     pub fn recording_path(&self) -> Option<String> {
         self.recording_path.lock().clone()
+    }
+
+    /// Seconds recorded so far and current file size; zeros when not recording.
+    pub fn progress(&self) -> (u64, u64) {
+        let secs = self.started.lock().map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        let bytes = match (self.pipeline.lock().is_some(), self.recording_path.lock().clone()) {
+            (true, Some(p)) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        };
+        (secs, bytes)
     }
 
     pub fn set_mic_gain(&self, gain: f32) {
@@ -62,6 +75,7 @@ impl RecordSession {
         config: AudioConfig,
         output_path: PathBuf,
         audio_source: Box<dyn AudioSource>,
+        level_feed: Option<LevelFeedFn>,
     ) -> Result<String, String> {
         self.stop_and_shutdown(false);
         self.shutting_down.store(false, Ordering::SeqCst);
@@ -101,11 +115,12 @@ impl RecordSession {
         let sink: Box<dyn StreamSink> = Box::new(Mp3DirectSink::new(file));
 
         let session_weak = Arc::downgrade(self);
-        let on_mic_busy = Arc::new(move || {
+        let on_mic_busy = Arc::new(move |reason: String| {
             if let Some(session) = session_weak.upgrade() {
-                session.set_state(RecordState::Error {
-                    reason: "mic_busy".into(),
-                });
+                if session.shutting_down.load(Ordering::SeqCst) {
+                    return; // user stop already won the race
+                }
+                session.set_state(RecordState::Error { reason });
                 session.stop_and_shutdown(true);
             }
         });
@@ -117,7 +132,7 @@ impl RecordSession {
             Some(sink),
             *self.mic_gain.lock(),
             on_mic_busy,
-            None,
+            level_feed,
         );
 
         if let Err(e) = pipeline.start() {
@@ -129,6 +144,7 @@ impl RecordSession {
         }
         *self.pipeline.lock() = Some(pipeline);
         *self.recording_path.lock() = Some(display_path.clone());
+        *self.started.lock() = Some(Instant::now());
 
         self.set_state(RecordState::Recording {
             path: display_path.clone(),
@@ -150,6 +166,7 @@ impl RecordSession {
         if let Some(mut p) = self.pipeline.lock().take() {
             p.stop();
         }
+        *self.started.lock() = None;
 
         let terminal = resolve_record_teardown_state(&self.current_state.lock(), preserve_terminal);
         self.set_state(terminal);

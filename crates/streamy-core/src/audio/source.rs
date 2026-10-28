@@ -5,10 +5,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+/// Receives captured PCM; returning false stops capture.
+pub type FrameCallback = Box<dyn FnMut(&[i16]) -> bool + Send>;
+
 pub trait AudioSource: Send + Sync + 'static {
     /// Start capturing audio. Calls `on_frame` repeatedly with captured 16-bit PCM samples.
     /// If `on_frame` returns false, capture stops.
-    fn start(&mut self, on_frame: Box<dyn FnMut(&[i16]) -> bool + Send>) -> Result<(), String>;
+    fn start(&mut self, on_frame: FrameCallback) -> Result<(), String>;
 
     /// Stop capture and release hardware resources. Idempotent.
     fn stop(&mut self);

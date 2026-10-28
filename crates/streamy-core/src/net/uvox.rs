@@ -2,7 +2,7 @@
 //! Live-verified against DNAS2 2.6.1 for BOTH audio/mpeg and audio/aacp.
 
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -11,12 +11,15 @@ use std::time::Duration;
 use crate::core::framing::{adts_header, message};
 use crate::core::wire_safety::{header_value, strip_control_chars, truncate, MAX_HEADER_VALUE};
 use crate::core::xtea::encipher;
-use crate::net::client::{connect_any, SourceClient, SourceClientError};
+use crate::net::client::{
+    connect_any, resolve, AbortHandle, SourceClient, SourceClientError, StationInfo,
+    HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+};
 
-const HANDSHAKE_TIMEOUT_MS: u64 = 6_000;
-const SEND_TIMEOUT_MS: u64 = 10_000;
 const CLOSE_JOIN_MS: u64 = 500;
-const ICY_PUB: &str = "1";
+/// Largest data payload we negotiate via 0x1008 (max-payload); bigger encoder
+/// chunks are split across several data messages.
+const MAX_PAYLOAD: usize = 16_377;
 
 pub struct UvoxClient {
     host: String,
@@ -30,8 +33,10 @@ pub struct UvoxClient {
 
     data_class: u16,
     data_type: u16,
+    station: StationInfo,
 
     stream: Option<TcpStream>,
+    abort: AbortHandle,
 }
 
 impl UvoxClient {
@@ -62,8 +67,15 @@ impl UvoxClient {
             dj_user,
             data_class,
             data_type,
+            station: StationInfo::default(),
             stream: None,
+            abort: AbortHandle::default(),
         }
+    }
+
+    pub fn with_station(mut self, station: StationInfo) -> Self {
+        self.station = station;
+        self
     }
 
     fn read_payload(stream: &mut TcpStream) -> Result<String, SourceClientError> {
@@ -121,15 +133,9 @@ impl SourceClient for UvoxClient {
     ) -> Result<(), SourceClientError> {
         self.close();
 
-        let addrs: Vec<SocketAddr> = format!("{}:{}", self.host, self.port)
-            .to_socket_addrs()
-            .map_err(|e| SourceClientError::Io(e))?
-            .collect();
-        if addrs.is_empty() {
-            return Err(SourceClientError::Protocol("Address resolution failed".into()));
-        }
-
+        let addrs = resolve(&self.host, self.port)?;
         let mut s = connect_any(&addrs)?;
+        self.abort.arm(&s);
         s.set_nodelay(true)?;
         s.set_read_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
         s.set_write_timeout(Some(Duration::from_millis(HANDSHAKE_TIMEOUT_MS)))?;
@@ -138,7 +144,7 @@ impl SourceClient for UvoxClient {
         let cipher_resp = Self::request(&mut s, 1, 0x009, Some("2.1"))?;
         if !cipher_resp.starts_with("ACK") {
             return Err(SourceClientError::Protocol(format!(
-                "cipher NAK: {}",
+                "handshake rejected (cipher): {}",
                 cipher_resp
             )));
         }
@@ -156,7 +162,7 @@ impl SourceClient for UvoxClient {
         let auth_resp = Self::request(&mut s, 1, 0x001, Some(&auth_payload))?;
         if !auth_resp.starts_with("ACK") {
             return Err(SourceClientError::Protocol(format!(
-                "auth NAK: {}",
+                "auth rejected: {}",
                 auth_resp
             )));
         }
@@ -195,11 +201,16 @@ impl SourceClient for UvoxClient {
             "icy-genre",
         )?;
         Self::require_ack(
-            &Self::request(&mut s, 1, 0x102, Some("http://streamy.app"))?,
+            &Self::request(
+                &mut s,
+                1,
+                0x102,
+                Some(&header_value(&self.station.url, MAX_HEADER_VALUE)),
+            )?,
             "icy-url",
         )?;
         Self::require_ack(
-            &Self::request(&mut s, 1, 0x103, Some(ICY_PUB))?,
+            &Self::request(&mut s, 1, 0x103, Some(if self.station.public { "1" } else { "0" }))?,
             "icy-pub",
         )?;
         Self::require_ack(
@@ -211,7 +222,7 @@ impl SourceClient for UvoxClient {
         let standby = Self::request(&mut s, 1, 0x004, None)?;
         if !standby.starts_with("ACK") {
             return Err(SourceClientError::Protocol(format!(
-                "standby NAK: {}",
+                "handshake rejected (standby): {}",
                 standby
             )));
         }
@@ -228,14 +239,15 @@ impl SourceClient for UvoxClient {
 
     fn send(&mut self, frame: &[u8]) -> Result<(), SourceClientError> {
         let s = self.stream.as_mut().ok_or(SourceClientError::Closed)?;
-        let msg = if self.data_class == 8 {
+        if self.data_class == 8 {
             // AAC requires ADTS header declaring AAC-LC core rate (sample_rate_hz / 2)
             let adts = adts_header(frame, self.sample_rate_hz / 2, self.channels);
-            message(self.data_class, self.data_type, &adts)
+            s.write_all(&message(self.data_class, self.data_type, &adts))?;
         } else {
-            message(self.data_class, self.data_type, frame)
-        };
-        s.write_all(&msg)?;
+            for chunk in frame.chunks(MAX_PAYLOAD) {
+                s.write_all(&message(self.data_class, self.data_type, chunk))?;
+            }
+        }
         s.flush()?;
         Ok(())
     }
@@ -266,12 +278,17 @@ impl SourceClient for UvoxClient {
         payload[6..].copy_from_slice(xml_bytes);
 
         let msg = message(3, 0x902, &payload);
-        let _ = s.write_all(&msg);
-        let _ = s.flush();
+        s.write_all(&msg)?;
+        s.flush()?;
         Ok(())
     }
 
+    fn abort_handle(&self) -> AbortHandle {
+        self.abort.clone()
+    }
+
     fn close(&mut self) {
+        self.abort.disarm();
         if let Some(s) = self.stream.take() {
             // Bounded 500ms join for terminate message
             let done = Arc::new(AtomicBool::new(false));
