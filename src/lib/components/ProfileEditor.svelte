@@ -10,8 +10,16 @@
   const LOW_RATES = [16000, 22050];
 
   // Secrets are write-only: start blank, blank means "keep the saved one".
-  let p = $state<Profile>(untrack(() => ({ ...profile, password: "", dj_password: "" })));
-  let djPort = $state(untrack(() => (profile.dj_port ? String(profile.dj_port) : "")));
+  // One port field: older DJ profiles kept theirs in dj_port, folded in here.
+  let p = $state<Profile>(
+    untrack(() => ({
+      ...profile,
+      port: profile.mode === "DJ" && profile.dj_port ? profile.dj_port : profile.port,
+      dj_port: null,
+      password: "",
+      dj_password: "",
+    })),
+  );
   let touched = $state(false);
 
   const isDj = $derived(p.mode === "DJ");
@@ -29,11 +37,8 @@
   const portError = $derived(
     !Number.isInteger(p.port) || p.port < 1 || p.port > 65535 ? t("errPortInvalid") : null,
   );
-  const djPortValue = $derived(djPort.trim() === "" ? null : Number(djPort));
-  const djPortError = $derived(
-    isDj && djPortValue !== null && (!Number.isInteger(djPortValue) || djPortValue < 1 || djPortValue > 65535)
-      ? t("errPortInvalid")
-      : null,
+  const portHint = $derived(
+    !isDj ? t("fieldHostHint") : isIcecast ? t("fieldPortHintAzuracast") : t("fieldPortHintShoutcastDj"),
   );
   // New profiles need a password for the mode in use.
   const passwordMissing = $derived(
@@ -45,24 +50,30 @@
 
   export function submit() {
     touched = true;
-    if (!p.host.trim() || portError || djPortError || passwordMissing) return;
+    if (!p.host.trim() || portError || passwordMissing) return;
     onsubmit({
       ...p,
       sid: Number(p.sid) || 1,
-      dj_port: isDj ? djPortValue : null,
+      dj_port: null,
       dj_user: p.dj_user?.trim() || null,
       dj_mount: p.dj_mount?.trim() || null,
     });
   }
 
+  /** AzuraCast takes DJs on its own port (8005 by default), not the listener port 8000. */
+  function suggestAzuracast() {
+    if (!p.dj_mount) p.dj_mount = "/";
+    if (p.port === 8000) p.port = 8005;
+  }
+
   function setMode(mode: Profile["mode"]) {
     p.mode = mode;
-    if (mode === "DJ" && p.dj_protocol === "ICECAST" && !p.dj_mount) p.dj_mount = "/";
+    if (mode === "DJ" && p.dj_protocol === "ICECAST") suggestAzuracast();
   }
 
   function setProtocol(e: Event) {
     p.dj_protocol = (e.currentTarget as HTMLSelectElement).value as Profile["dj_protocol"];
-    if (p.dj_protocol === "ICECAST" && !p.dj_mount) p.dj_mount = "/";
+    if (p.dj_protocol === "ICECAST") suggestAzuracast();
   }
 </script>
 
@@ -113,24 +124,11 @@
         {#if hostError}<span class="field-error">{hostError}</span>{/if}
       </label>
       <label class="field">
-        <span>{t("fieldPort")}</span>
+        <span>{isDj ? t("fieldDjPort") : t("fieldPort")}</span>
         <input class="input" type="number" min="1" max="65535" bind:value={p.port} aria-invalid={portError ? "true" : undefined} />
       </label>
     </div>
-    <p class="hint">{portError ?? t("fieldHostHint")}</p>
-    {#if isDj}
-      <label class="field">
-        <span>{t("fieldDjPort")}</span>
-        <input
-          class="input"
-          inputmode="numeric"
-          bind:value={djPort}
-          placeholder={String(p.port || "")}
-          aria-invalid={djPortError ? "true" : undefined}
-        />
-        <span class={djPortError ? "field-error" : "hint"}>{djPortError ?? t("fieldDjPortHint")}</span>
-      </label>
-    {/if}
+    <p class={portError ? "field-error" : "hint"}>{portError ?? portHint}</p>
   </fieldset>
 
   <fieldset>

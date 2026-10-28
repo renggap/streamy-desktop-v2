@@ -727,8 +727,13 @@ pub fn validate_profile(mut p: ProfileRecord) -> Result<ProfileRecord, String> {
     p.dj_protocol = format!("{proto:?}");
     p.dj_user = trimmed_opt(p.dj_user);
     p.dj_mount = trimmed_opt(p.dj_mount);
-    if mode == BroadcastMode::DJ && p.dj_port == Some(0) {
-        return Err("profile_port_invalid".into());
+    // One port per profile (the editor has no separate DJ port any more). A
+    // legacy DJ port is the one DJs connected on, so it wins unless the host
+    // field carried an explicit port.
+    if let Some(dj_port) = p.dj_port.take().filter(|&dp| dp != 0) {
+        if mode == BroadcastMode::DJ && port_from_host.is_none() {
+            p.port = dj_port;
+        }
     }
     if mode == BroadcastMode::DJ && proto == DjProtocol::ICECAST && p.dj_mount.is_none() {
         p.dj_mount = Some("/".into());
@@ -1137,6 +1142,25 @@ mod tests {
         assert_eq!(p.dj_protocol, "ICECAST");
         assert_eq!(p.dj_user, None);
         assert_eq!(p.dj_mount.as_deref(), Some("/"));
+    }
+
+    #[test]
+    fn legacy_dj_port_is_folded_into_the_single_port() {
+        let dj = |host: &str| ProfileRecord {
+            host: host.into(),
+            port: 8000,
+            mode: "DJ".into(),
+            dj_port: Some(8005),
+            ..base()
+        };
+        let p = validate_profile(dj("radio.example.com")).unwrap();
+        assert_eq!((p.port, p.dj_port), (8005, None));
+        // A port pasted with the host is what the user means now.
+        let p = validate_profile(dj("http://radio.example.com:8015")).unwrap();
+        assert_eq!((p.port, p.dj_port), (8015, None));
+        // Source profiles never used it.
+        let p = validate_profile(ProfileRecord { mode: "SOURCE".into(), ..dj("radio.example.com") }).unwrap();
+        assert_eq!((p.port, p.dj_port), (8000, None));
     }
 
     #[test]

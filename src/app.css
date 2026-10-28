@@ -164,8 +164,11 @@
   }
 
   /* Toggle switch: <label class="switch"><input type="checkbox"><span></span>Label</label> */
+  /* relative: keeps the sr-only checkbox inside the label. Unanchored, it sits
+     in the page, and focusing it below the fold scrolls the whole (overflow:
+     hidden) window, shifting the app with no way back. */
   .switch {
-    @apply flex cursor-pointer items-center gap-2.5 text-[13px] text-gray-700;
+    @apply relative flex cursor-pointer items-center gap-2.5 text-[13px] text-gray-700;
   }
   .switch input {
     @apply sr-only;
