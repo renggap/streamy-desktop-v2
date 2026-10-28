@@ -73,3 +73,6 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          # Signed updater bundles only here: the key exists only as a release secret,
+          # so ordinary builds (CI, local) leave them off.
+          args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
