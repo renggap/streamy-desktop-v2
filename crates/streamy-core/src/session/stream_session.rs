@@ -150,6 +150,10 @@ pub struct StreamSession {
     recording_since: Mutex<Option<Instant>>,
     /// UI-facing now-playing verdict channel (set at start, per session).
     title_ack: Mutex<TitleAckCallback>,
+    /// The title of the last USER-initiated push. Only its verdict is forwarded
+    /// to the UI (a toast per playlist track or reconnect replay would be spam);
+    /// automatic pushes still reach the server, just silently.
+    user_ack_title: Arc<Mutex<Option<String>>>,
 }
 
 impl StreamSession {
@@ -168,6 +172,7 @@ impl StreamSession {
             recording_path: Mutex::new(None),
             recording_since: Mutex::new(None),
             title_ack: Mutex::new(Arc::new(|_| {})),
+            user_ack_title: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -365,10 +370,26 @@ impl StreamSession {
             }
         };
 
-        // The source reports the server's verdict on every title push; the UI
-        // toasts from that, never from an assumption.
+        // The source reports the server's verdict on every title push; only a
+        // USER-initiated push's verdict is forwarded to the UI (see
+        // [user_ack_title]) so automatic announces and replays stay silent.
         let title_ack_cb = self.title_ack.lock().clone();
-        source.set_title_ack(Arc::new(move |ack| title_ack_cb(ack)));
+        let user_ack_title = self.user_ack_title.clone();
+        source.set_title_ack(Arc::new(move |ack| {
+            let is_user_push = {
+                let mut expected = user_ack_title.lock();
+                match expected.as_deref() {
+                    Some(t) if t == ack.title => {
+                        *expected = None;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if is_user_push {
+                title_ack_cb(ack);
+            }
+        }));
 
         let abort = source.abort_handle();
         let client: SharedClient = Arc::new(Mutex::new(source));
@@ -584,17 +605,37 @@ impl StreamSession {
 
     /// Set the title shown to listeners. Returns `true` when it goes out right
     /// away (live), `false` when it is queued and sent once the stream connects.
+    /// This is the USER-initiated push: its server verdict is the one the UI toasts.
     pub fn update_now_playing(&self, title: &str) -> Result<bool, String> {
-        let title = title.trim();
-        if title.is_empty() {
+        let title_trimmed = title.trim();
+        if title_trimmed.is_empty() {
             return Err("Title is empty".into());
         }
+        *self.user_ack_title.lock() = Some(title_trimmed.to_string());
+        self.push_title(title_trimmed);
+        Ok(self.was_live_for_push())
+    }
+
+    /// Set the title WITHOUT a UI verdict: playlist track announcements and
+    /// other automatic pushes reach the server but never toast.
+    pub fn announce_now_playing(&self, title: &str) -> Result<bool, String> {
+        let title_trimmed = title.trim();
+        if title_trimmed.is_empty() {
+            return Err("Title is empty".into());
+        }
+        self.push_title(title_trimmed);
+        Ok(self.was_live_for_push())
+    }
+
+    fn push_title(&self, title: &str) {
         *self.now_playing.title.lock() = Some(title.to_string());
-        let live = matches!(self.state(), StreamState::Live { .. });
-        if live {
+        if matches!(self.state(), StreamState::Live { .. }) {
             self.now_playing.pending.store(true, Ordering::SeqCst);
         }
-        Ok(live)
+    }
+
+    fn was_live_for_push(&self) -> bool {
+        matches!(self.state(), StreamState::Live { .. })
     }
 
     pub fn now_playing(&self) -> Option<String> {

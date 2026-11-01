@@ -3,7 +3,8 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -70,6 +71,17 @@ fn mock_weblet(listener: TcpListener, reply: &'static str, req_rx: mpsc::Sender<
     s.flush().unwrap();
 }
 
+/// Wait until at least `n` verdicts arrived (the pushes are off-thread now).
+fn wait_for_acks(acks: &std::sync::Arc<std::sync::Mutex<Vec<TitleAck>>>, n: usize, what: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while acks.lock().unwrap().len() < n {
+        if std::time::Instant::now() > deadline {
+            panic!("timed out waiting for {what}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn v1_login_ok2_send_audio_and_title_verdicts_true() {
     let panel = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -105,8 +117,9 @@ fn v1_login_ok2_send_audio_and_title_verdicts_true() {
     client.connect(64, "Test Station", "Talk").expect("v1 connect");
     client.send(&[1, 2, 3, 4, 5]).expect("v1 send");
 
-    // Title push: goes to the Weblet, which confirms.
+    // Title push: goes to the Weblet, which confirms (off-thread: poll for it).
     client.update_now_playing("Kajian Pagi 84698").expect("title push");
+    wait_for_acks(&acks, 1, "one verdict");
 
     assert_eq!(login_rx.recv().unwrap(), "djuser:djpass");
     assert_eq!(audio_rx.recv().unwrap(), vec![1, 2, 3, 4, 5]);
@@ -157,6 +170,7 @@ fn v1_title_verdicts_false_when_weblet_refuses() {
 
     client.connect(64, "Test Station", "Talk").expect("v1 connect");
     client.update_now_playing("Refused Title").expect("title push");
+    wait_for_acks(&acks, 1, "one verdict");
 
     let acks = acks.lock().unwrap();
     assert_eq!(acks.len(), 1);
@@ -341,4 +355,351 @@ fn fallback_v1_refused_then_uvox_wins_the_chain() {
 
     v1_thread.join().unwrap();
     uvox_thread.join().unwrap();
+}
+
+#[test]
+fn v1_title_push_never_stalls_the_audio_path() {
+    // Regression guard: the admin GET runs off-thread. With a Weblet that never
+    // answers, update_now_playing must return immediately (the transport worker
+    // calls it between audio frames; a synchronous GET would stall ~9s).
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let panel_addr = panel.local_addr().unwrap();
+    let source_addr = source.local_addr().unwrap();
+
+    // Weblet accepts and never replies (worst case: blackhole).
+    let blackhole = thread::spawn(move || {
+        let (_s, _) = panel.accept().expect("weblet accept");
+        thread::sleep(Duration::from_secs(5));
+    });
+
+    let (login_tx, _login_rx) = mpsc::channel();
+    let (audio_tx, _audio_rx) = mpsc::channel();
+    let src_thread = thread::spawn(move || mock_v1_source(source, login_tx, audio_tx));
+
+    let mut client = ShoutcastV1Client::new(
+        source_addr.ip().to_string(),
+        source_addr.port(),
+        "djuser".into(),
+        "djpass".into(),
+        panel_addr.port(),
+    );
+    client.connect(64, "Test Station", "Talk").expect("v1 connect");
+
+    let t0 = std::time::Instant::now();
+    client.update_now_playing("Slow Weblet Title").expect("title push");
+    let elapsed = t0.elapsed();
+    assert!(elapsed < Duration::from_millis(200), "push blocked for {elapsed:?}");
+    // Audio keeps flowing meanwhile.
+    client.send(&[7, 7, 7]).expect("send not blocked");
+
+    src_thread.join().unwrap();
+    blackhole.join().unwrap();
+}
+
+#[test]
+fn session_dj_ultravox_builds_v1_first_chain_and_reports_verdict() {
+    // End-to-end through the session: a DJ ULTRAVOX profile must try v1 on
+    // djport+1 first; when the v1 login succeeds, audio goes raw and the title
+    // verdict comes back through the session's ack callback.
+    use streamy_core::audio::source::SineAudioSource;
+    use streamy_core::core::audio_config_rules::{BroadcastMode, Codec, DjProtocol};
+    use streamy_core::core::teardown_state::StreamState;
+    use streamy_core::session::stream_session::{StreamProfile, StreamSession};
+
+    // Panel port: the Weblet (title channel).
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let panel_port = panel.local_addr().unwrap().port();
+    // v1 source port = panel + 1 in the test's layout: bind it explicitly.
+    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
+    // The uvox candidates (panel port and panel+2) must REFUSE or stay closed
+    // so the chain proves it picked the v1 leg first. Bind them to nothing:
+    // a closed port errors fast with ECONNREFUSED on loopback.
+    let dj_port = panel_port; // profile lists the panel port
+
+    let (login_tx, login_rx) = mpsc::channel();
+    let (audio_tx, _audio_rx) = mpsc::channel();
+    let weblet_reqs = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let weblet_reqs2 = weblet_reqs.clone();
+
+    let src_stop = Arc::new(AtomicBool::new(false));
+    let src_stop2 = src_stop.clone();
+    let src_thread = thread::spawn(move || {
+        source.set_nonblocking(true).unwrap();
+        'outer: while !src_stop2.load(Ordering::SeqCst) {
+            let (mut s, _) = match source.accept() {
+                Ok(v) => v,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+            };
+            let _ = s.set_nonblocking(false);
+        s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let login = read_line_crude(&mut s);
+        login_tx.send(login).unwrap();
+        s.write_all(b"OK2\r\nicy-caps:11\r\n\r\n").unwrap();
+        s.flush().unwrap();
+        // drain icy headers
+        let mut b = [0u8; 1];
+        let mut headers = Vec::new();
+        while s.read_exact(&mut b).is_ok() {
+            headers.push(b[0]);
+            if headers.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+            // read some audio until the peer stops
+            let mut audio = vec![0u8; 512];
+            loop {
+                match s.read(&mut audio) {
+                    Ok(0) | Err(_) => continue 'outer,
+                    Ok(_) => {}
+                }
+            }
+            #[allow(unreachable_code)]
+            {
+                let _: mpsc::Sender<Vec<u8>> = audio_tx;
+            }
+        }
+    });
+    let weblet_stop = Arc::new(AtomicBool::new(false));
+    let weblet_stop2 = weblet_stop.clone();
+    let weblet_thread = thread::spawn(move || {
+        // Serve pushes until flagged (non-blocking accept so the flag is seen).
+        let panel2 = panel.try_clone().unwrap();
+        drop(panel);
+        panel2.set_nonblocking(true).unwrap();
+        while !weblet_stop2.load(Ordering::SeqCst) {
+            let (mut s, _) = match panel2.accept() {
+                Ok(v) => v,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+            };
+            let _ = s.set_nonblocking(false);
+            s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut req = Vec::new();
+            let mut b = [0u8; 1];
+            while s.read_exact(&mut b).is_ok() {
+                req.push(b[0]);
+                if req.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            if req.is_empty() {
+                continue;
+            }
+            weblet_reqs2.lock().unwrap().push(String::from_utf8_lossy(&req).to_string());
+            s.write_all(b"HTTP/1.0 200 OK\r\n\r\nTitle Updated").unwrap();
+            s.flush().unwrap();
+        }
+    });
+
+    let acks = Arc::new(std::sync::Mutex::new(Vec::<streamy_core::net::TitleAck>::new()));
+    let acks2 = acks.clone();
+
+    let session = StreamSession::new(Arc::new(|_| {}));
+    session.set_title_ack_callback(Arc::new(move |a| acks2.lock().unwrap().push(a)));
+
+    let profile = StreamProfile {
+        id: 1,
+        name: "Centova Test".into(),
+        host: "127.0.0.1".into(),
+        port: dj_port,
+        sid: 1,
+        password: "djpass".into(),
+        codec: Codec::MP3,
+        bitrate_kbps: 64,
+        sample_rate_hz: 44_100,
+        mono: true,
+        mode: BroadcastMode::DJ,
+        dj_user: Some("djuser".into()),
+        dj_password: Some("djpass".into()),
+        dj_port: Some(dj_port),
+        dj_protocol: DjProtocol::ULTRAVOX,
+        ..Default::default()
+    };
+
+    session
+        .start(profile, Box::new(SineAudioSource::new(44_100, true, 1024)), None)
+        .expect("session start");
+
+    // Wait for the v1 leg to log in: the chain must have picked it first.
+    let login = login_rx.recv_timeout(Duration::from_secs(5)).expect("v1 leg used");
+    assert_eq!(login, "djuser:djpass");
+
+    // Push a title; the Weblet confirms it.
+    session.update_now_playing("Kajian Pagi").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while acks.lock().unwrap().is_empty() {
+        if std::time::Instant::now() > deadline {
+            panic!("no verdict arrived");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let verdicts = acks.lock().unwrap();
+    assert!(verdicts[0].ok, "weblet confirmed");
+    assert_eq!(verdicts[0].title, "Kajian Pagi");
+
+    // Session reached Live through the v1 leg.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if matches!(session.state(), StreamState::Live { .. }) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("never went live; state = {:?}", session.state());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    session.stop_and_shutdown(false);
+    weblet_stop.store(true, Ordering::SeqCst);
+    src_stop.store(true, Ordering::SeqCst);
+    src_thread.join().unwrap();
+    weblet_thread.join().unwrap();
+}
+
+#[test]
+fn session_announces_are_silent_user_pushes_toast() {
+    // Gating: only the USER-initiated push's verdict reaches the UI callback.
+    // A playlist announce with the SAME title text must not fire it twice.
+    use streamy_core::audio::source::SineAudioSource;
+    use streamy_core::core::audio_config_rules::{BroadcastMode, Codec, DjProtocol};
+    use streamy_core::core::teardown_state::StreamState;
+    use streamy_core::session::stream_session::{StreamProfile, StreamSession};
+
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let panel_port = panel.local_addr().unwrap().port();
+    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
+
+    let src_stop = Arc::new(AtomicBool::new(false));
+    let src_stop2 = src_stop.clone();
+    let src_thread = thread::spawn(move || {
+        source.set_nonblocking(true).unwrap();
+        'outer: while !src_stop2.load(Ordering::SeqCst) {
+            let (mut s, _) = match source.accept() {
+                Ok(v) => v,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+            };
+            let _ = s.set_nonblocking(false);
+            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = read_line_crude(&mut s);
+            s.write_all(b"OK2\r\nicy-caps:11\r\n\r\n").unwrap();
+            s.flush().unwrap();
+            let mut b = [0u8; 1];
+            let mut headers = Vec::new();
+            while s.read_exact(&mut b).is_ok() {
+                headers.push(b[0]);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let mut audio = vec![0u8; 512];
+            loop {
+                match s.read(&mut audio) {
+                    Ok(0) | Err(_) => continue 'outer,
+                    Ok(_) => {}
+                }
+            }
+        }
+    });
+    // Weblet accepts title pushes and confirms, until the session stops.
+    let weblet_stop = Arc::new(AtomicBool::new(false));
+    let weblet_stop2 = weblet_stop.clone();
+    let panel2 = panel.try_clone().unwrap();
+    let weblet_thread = thread::spawn(move || {
+        panel2.set_nonblocking(true).unwrap();
+        while !weblet_stop2.load(Ordering::SeqCst) {
+            let (mut s, _) = match panel2.accept() {
+                Ok(v) => v,
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+            };
+            let _ = s.set_nonblocking(false);
+            s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut req = Vec::new();
+            let mut b = [0u8; 1];
+            while s.read_exact(&mut b).is_ok() {
+                req.push(b[0]);
+                if req.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            if req.is_empty() {
+                continue;
+            }
+            s.write_all(b"HTTP/1.0 200 OK\r\n\r\nTitle Updated").unwrap();
+            s.flush().unwrap();
+        }
+    });
+
+    let ui_acks = Arc::new(std::sync::Mutex::new(Vec::<streamy_core::net::TitleAck>::new()));
+    let ui_acks2 = ui_acks.clone();
+
+    let session = StreamSession::new(Arc::new(|_| {}));
+    session.set_title_ack_callback(Arc::new(move |a| ui_acks2.lock().unwrap().push(a)));
+
+    let profile = StreamProfile {
+        id: 1,
+        name: "Gate Test".into(),
+        host: "127.0.0.1".into(),
+        port: panel_port,
+        sid: 1,
+        password: "djpass".into(),
+        codec: Codec::MP3,
+        bitrate_kbps: 64,
+        sample_rate_hz: 44_100,
+        mono: true,
+        mode: BroadcastMode::DJ,
+        dj_user: Some("djuser".into()),
+        dj_password: Some("djpass".into()),
+        dj_port: Some(panel_port),
+        dj_protocol: DjProtocol::ULTRAVOX,
+        ..Default::default()
+    };
+
+    session
+        .start(profile, Box::new(SineAudioSource::new(44_100, true, 1024)), None)
+        .expect("session start");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !matches!(session.state(), StreamState::Live { .. }) {
+        if std::time::Instant::now() > deadline {
+            panic!("never went live; state = {:?}", session.state());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // Playlist announce: reaches the server, NO UI verdict.
+    session.announce_now_playing("Track A").unwrap();
+    thread::sleep(Duration::from_millis(300));
+    assert!(ui_acks.lock().unwrap().is_empty(), "announce must be silent");
+
+    // User push: exactly ONE UI verdict.
+    session.update_now_playing("Track A").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while ui_acks.lock().unwrap().is_empty() {
+        if std::time::Instant::now() > deadline {
+            panic!("user push verdict never arrived; state={:?} np={:?}", session.state(), session.now_playing());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    thread::sleep(Duration::from_millis(200));
+    let verdicts = ui_acks.lock().unwrap();
+    assert_eq!(verdicts.len(), 1, "exactly one verdict for the user push");
+    assert!(verdicts[0].ok);
+
+    session.stop_and_shutdown(false);
+    weblet_stop.store(true, Ordering::SeqCst);
+    src_stop.store(true, Ordering::SeqCst);
+    src_thread.join().unwrap();
+    weblet_thread.join().unwrap();
 }

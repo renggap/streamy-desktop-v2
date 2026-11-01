@@ -90,27 +90,31 @@ impl IcecastSourceClient {
         Ok(line.trim_end_matches(['\r', '\n']).to_string())
     }
 
-    /// Admin metadata update (HTTP GET), synchronous here: callers bound it
-    /// (the transport worker between frames, ADMIN_TIMEOUT_MS inside). Reports
-    /// the server's real verdict through the ack callback on completion.
+    /// Admin metadata update (HTTP GET), reported via the ack callback. Runs
+    /// OFF-THREAD: the transport worker calls this between audio frames, and a
+    /// slow admin endpoint must never stall the audio (it was threaded before
+    /// the title-ack work too).
     fn admin_update_metadata(&self, title: &str) {
-        let path = format!(
-            "/admin/metadata?mode=updinfo&charset=UTF-8&mount={}&song={}",
-            crate::net::shoutcast_v1::url_encode(&self.mount),
-            crate::net::shoutcast_v1::url_encode(title)
-        );
-        let reply = admin_get(
-            &self.host,
-            self.port,
-            &path,
-            &[("Authorization", &format!("Basic {}", self.auth_header()))],
-        );
-        if !reply.ok() {
-            tracing::warn!("icecast metadata update rejected (HTTP {})", reply.code);
-        }
-        if let Some(ack) = self.title_ack.as_ref() {
-            ack(TitleAck { title: title.to_string(), ok: reply.ok() });
-        }
+        let host = self.host.clone();
+        let port = self.port;
+        let mount = self.mount.clone();
+        let auth = self.auth_header();
+        let title = title.to_string();
+        let ack = self.title_ack.clone();
+        std::thread::spawn(move || {
+            let path = format!(
+                "/admin/metadata?mode=updinfo&charset=UTF-8&mount={}&song={}",
+                crate::net::shoutcast_v1::url_encode(&mount),
+                crate::net::shoutcast_v1::url_encode(&title)
+            );
+            let reply = admin_get(&host, port, &path, &[("Authorization", &format!("Basic {auth}"))]);
+            if !reply.ok() {
+                tracing::warn!("icecast metadata update rejected (HTTP {})", reply.code);
+            }
+            if let Some(ack) = ack.as_ref() {
+                ack(TitleAck { title, ok: reply.ok() });
+            }
+        });
     }
 }
 

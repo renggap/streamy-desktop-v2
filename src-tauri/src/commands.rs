@@ -257,7 +257,7 @@ impl AppState {
         if !self.prefs.lock().load().send_track_titles {
             return;
         }
-        if let Err(e) = self.stream_session.update_now_playing(&track.title) {
+        if let Err(e) = self.stream_session.announce_now_playing(&track.title) {
             tracing::warn!("track title update failed: {e}");
         }
     }

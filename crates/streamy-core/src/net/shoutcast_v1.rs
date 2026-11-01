@@ -198,18 +198,22 @@ impl SourceClient for ShoutcastV1Client {
     /// Out-of-band title update; the verdict is reported via the ack callback
     /// (see [push_title_via_admin]). Not logged in -> no verdict, replayed after
     /// the next successful handshake.
+    ///
+    /// The admin GET runs OFF-THREAD: this is called from the transport worker
+    /// between audio frames, and a slow or dead Weblet must never stall the
+    /// audio (up to ~9s of connect+read timeouts otherwise).
     fn update_now_playing(&mut self, title: &str) -> Result<(), SourceClientError> {
         let safe = header_value(title, MAX_HEADER_VALUE);
         self.last_title = Some(safe.clone());
         if self.stream.is_some() {
-            push_title_via_admin(
-                &self.host,
-                self.admin_port,
-                &self.user,
-                &self.password,
-                &safe,
-                self.title_ack.as_ref(),
-            );
+            let host = self.host.clone();
+            let admin_port = self.admin_port;
+            let (user, password) = (self.user.clone(), self.password.clone());
+            let ack = self.title_ack.clone();
+            let t = safe.clone();
+            std::thread::spawn(move || {
+                push_title_via_admin(&host, admin_port, &user, &password, &t, ack.as_ref());
+            });
         }
         Ok(())
     }
