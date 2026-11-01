@@ -25,7 +25,7 @@ use std::time::Duration;
 use crate::core::wire_safety::{header_value, strip_control_chars, MAX_HEADER_VALUE};
 use crate::net::client::{
     admin_get, connect_any, read_crlf_line, resolve, AbortHandle, SourceClient,
-    SourceClientError, TitleAck, TitleAckFn, HANDSHAKE_TIMEOUT_MS,
+    SourceClientError, TitleAck, TitleAckFn, HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
 };
 
 /// After `OK2`, drain the remaining header block for at most this long.
@@ -164,9 +164,12 @@ impl SourceClient for ShoutcastV1Client {
         let result = self.handshake(&mut s, bitrate_kbps, name, genre);
         match result {
             Ok(()) => {
-                // Streaming: writes own the socket; no read timeout.
+                // Streaming: writes bounded like the other clients so a stalled
+                // server cannot pin the client mutex forever — that would
+                // deadlock stop_and_shutdown (Android relies on the socket
+                // close in close(); the shared-core teardown waits on us).
                 s.set_read_timeout(None)?;
-                s.set_write_timeout(None)?;
+                s.set_write_timeout(Some(Duration::from_millis(SEND_TIMEOUT_MS)))?;
                 self.stream = Some(s);
                 // A fresh login has no title yet: re-announce the current one
                 // (off-thread: a slow admin port must not hold the connect).
