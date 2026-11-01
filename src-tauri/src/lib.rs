@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::AppState;
-use events::{EVENT_RECORD_STATE, EVENT_STREAM_STATE};
+use events::{EVENT_RECORD_STATE, EVENT_STREAM_STATE, EVENT_TITLE_ACK};
 use power::{Hold, PowerInhibitor};
 use storage::db::ProfileDb;
 use storage::prefs::SettingsStorage;
@@ -105,6 +105,15 @@ pub fn run() {
         }
     });
     let stream_session = StreamSession::new(stream_callback);
+
+    // Title verdicts: the session reports the server's real answer to every
+    // now-playing push; the UI toasts from that, never from an assumption.
+    let holder_title = app_handle_holder.clone();
+    stream_session.set_title_ack_callback(Arc::new(move |ack: streamy_core::net::TitleAck| {
+        if let Some(ref handle) = *holder_title.lock() {
+            let _ = handle.emit(EVENT_TITLE_ACK, ack);
+        }
+    }));
 
     // Record state callback
     let holder_record = app_handle_holder.clone();

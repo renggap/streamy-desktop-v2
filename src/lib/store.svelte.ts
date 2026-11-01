@@ -158,6 +158,7 @@ class AppStore {
         await api.onStreamState(() => void this.refresh()),
         await api.onRecordState(() => void this.refresh()),
         await api.onStreamRecording(() => void this.refresh()),
+        await api.onTitleAck((a) => this.onTitleAck(a)),
         await api.onPlayer((p) => this.#onPlayer(p)),
         await api.onPlayerError((e) => {
           const f = friendlyError(e.reason);
@@ -314,13 +315,20 @@ class AppStore {
   async updateNowPlaying(title: string): Promise<boolean> {
     try {
       const live = await api.updateNowPlaying(title);
-      this.toastKey("success", live ? "toastTitleSent" : "toastTitleQueued");
+      // Live: the real verdict arrives via onTitleAck and toasts from THAT
+      // (the server may still refuse it). Queued: the toast is honest already.
+      if (!live) this.toastKey("info", "toastTitleQueued");
       await this.refresh();
       return true;
     } catch (e) {
       this.toastError(e);
       return false;
     }
+  }
+
+  /** One now-playing push finished: toast from the server's real answer. */
+  onTitleAck(ack: { title: string; ok: boolean }) {
+    this.toastKey(ack.ok ? "success" : "error", ack.ok ? "toastTitleSent" : "toastTitleFailed");
   }
 
   // ---- recording ----------------------------------------------------------

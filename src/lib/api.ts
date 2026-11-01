@@ -24,6 +24,7 @@ const EVENT_STREAM_RECORDING = "stream-recording-changed";
 const EVENT_PLAYER_CHANGED = "player-changed";
 const EVENT_PLAYER_ERROR = "player-error";
 const EVENT_UPDATE_CHANGED = "update-changed";
+const EVENT_TITLE_ACK = "title-ack";
 
 export const api = {
   getStatus: (): Promise<AppStatus> => invoke("get_status"),
@@ -32,8 +33,10 @@ export const api = {
   startStream: (profileId: number | null): Promise<string | null> =>
     invoke("start_stream", { profileId }),
   stopStream: (): Promise<void> => invoke("stop_stream"),
-  /** true = sent live, false = queued until on air */
+  /** true = sent live (the server's real verdict arrives later via onTitleAck), false = queued until on air */
   updateNowPlaying: (title: string): Promise<boolean> => invoke("update_now_playing", { title }),
+  onTitleAck: (cb: (a: { title: string; ok: boolean }) => void): Promise<UnlistenFn> =>
+    listen<{ title: string; ok: boolean }>(EVENT_TITLE_ACK, (e) => cb(e.payload)),
 
   // Recording: records the broadcast while on air, else a standalone mic recording.
   startRecording: (): Promise<string> => invoke("start_recording"),

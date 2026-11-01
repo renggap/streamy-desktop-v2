@@ -58,6 +58,7 @@ export const en = {
   nowPlayingCurrent: "Listeners see: {title}",
   nowPlayingQueued: "Will be sent when you go live: {title}",
   toastTitleSent: "Title updated for listeners.",
+  toastTitleFailed: "Couldn't update the title on the server.",
   toastTitleQueued: "Title saved. It will be sent when you go live.",
 
   // Recording

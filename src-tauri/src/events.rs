@@ -16,6 +16,7 @@ pub const EVENT_STREAM_RECORDING: &str = "stream-recording-changed";
 pub const EVENT_PLAYER_CHANGED: &str = "player-changed";
 pub const EVENT_PLAYER_ERROR: &str = "player-error";
 pub const EVENT_UPDATE_CHANGED: &str = "update-changed";
+pub const EVENT_TITLE_ACK: &str = "title-ack";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayerErrorPayload {

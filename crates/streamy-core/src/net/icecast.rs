@@ -6,7 +6,7 @@
 //! *source* stream is not understood by harbor and would be relayed to listeners
 //! as corrupt audio.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -15,8 +15,8 @@ use base64::Engine;
 
 use crate::core::wire_safety::{header_value, parse_http_status, strip_control_chars, truncate, MAX_HEADER_VALUE, MAX_TITLE};
 use crate::net::client::{
-    connect_any, resolve, AbortHandle, SourceClient, SourceClientError, StationInfo,
-    HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+    admin_get, connect_any, resolve, AbortHandle, SourceClient, SourceClientError, StationInfo,
+    TitleAck, TitleAckFn, HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
 };
 
 const USER_AGENT: &str = concat!("StreamyDesktop/", env!("CARGO_PKG_VERSION"));
@@ -34,6 +34,9 @@ pub struct IcecastSourceClient {
 
     stream: Option<TcpStream>,
     abort: AbortHandle,
+    /// Where the server's verdict on a title push is reported (an accepted
+    /// /admin/metadata 2xx is what the server really acted on).
+    title_ack: Option<TitleAckFn>,
 }
 
 impl IcecastSourceClient {
@@ -61,6 +64,7 @@ impl IcecastSourceClient {
             station: StationInfo::default(),
             stream: None,
             abort: AbortHandle::default(),
+            title_ack: None,
         }
     }
 
@@ -86,51 +90,45 @@ impl IcecastSourceClient {
         Ok(line.trim_end_matches(['\r', '\n']).to_string())
     }
 
+    /// Admin metadata update (HTTP GET), synchronous here: callers bound it
+    /// (the transport worker between frames, ADMIN_TIMEOUT_MS inside). Reports
+    /// the server's real verdict through the ack callback on completion.
     fn admin_update_metadata(&self, title: &str) {
-        let host = self.host.clone();
-        let port = self.port;
-        let mount = self.mount.clone();
-        let auth = self.auth_header();
-        let title = title.to_string();
-
-        std::thread::spawn(move || {
-            let path = format!(
-                "/admin/metadata?mode=updinfo&mount={}&song={}&charset=UTF-8",
-                url_encode(&mount),
-                url_encode(&title)
-            );
-            let addrs = match resolve(&host, port) {
-                Ok(a) => a,
-                Err(_) => return,
-            };
-            let mut s = match connect_any(&addrs) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("icecast metadata update: connect failed: {e}");
-                    return;
-                }
-            };
-            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
-            let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
-
-            let req = format!(
-                "GET {} HTTP/1.0\r\nHost: {}:{}\r\nUser-Agent: {}\r\nAuthorization: Basic {}\r\nConnection: close\r\n\r\n",
-                path, host, port, USER_AGENT, auth
-            );
-            let _ = s.write_all(req.as_bytes());
-            let _ = s.flush();
-            let mut buf = Vec::new();
-            let _ = s.read_to_end(&mut buf);
-            let status = String::from_utf8_lossy(&buf);
-            let code = parse_http_status(status.lines().next().unwrap_or(""));
-            if !(200..=299).contains(&code) {
-                tracing::warn!("icecast metadata update rejected (HTTP {code})");
-            }
-        });
+        let path = format!(
+            "/admin/metadata?mode=updinfo&charset=UTF-8&mount={}&song={}",
+            crate::net::shoutcast_v1::url_encode(&self.mount),
+            crate::net::shoutcast_v1::url_encode(title)
+        );
+        let reply = admin_get(
+            &self.host,
+            self.port,
+            &path,
+            &[("Authorization", &format!("Basic {}", self.auth_header()))],
+        );
+        if !reply.ok() {
+            tracing::warn!("icecast metadata update rejected (HTTP {})", reply.code);
+        }
+        if let Some(ack) = self.title_ack.as_ref() {
+            ack(TitleAck { title: title.to_string(), ok: reply.ok() });
+        }
     }
 }
 
 impl SourceClient for IcecastSourceClient {
+    fn clone_box(&self) -> Box<dyn SourceClient> {
+        Box::new(IcecastSourceClient {
+            host: self.host.clone(),
+            port: self.port,
+            mount: self.mount.clone(),
+            user: self.user.clone(),
+            password: self.password.clone(),
+            mime: self.mime.clone(),
+            station: self.station.clone(),
+            stream: None,
+            abort: AbortHandle::default(),
+            title_ack: None,
+        })
+    }
     fn connect(
         &mut self,
         bitrate_kbps: u32,
@@ -216,11 +214,22 @@ impl SourceClient for IcecastSourceClient {
         Ok(())
     }
 
+    /// Push now-playing via the Icecast admin GET. Reports the server's real
+    /// verdict through the ack callback: `true` only on a 2xx — the server's
+    /// actual acceptance (what BUTT/Mixxx treat as success). Only while the
+    /// source is up: before that there's no mount to update (connect() replays
+    /// it) and no verdict is reported. Failures are `false`, never faked.
     fn update_now_playing(&mut self, title: &str) -> Result<(), SourceClientError> {
         let safe = strip_control_chars(title);
         let safe_capped = truncate(&safe, MAX_TITLE);
-        self.admin_update_metadata(&safe_capped);
+        if self.stream.is_some() {
+            self.admin_update_metadata(&safe_capped);
+        }
         Ok(())
+    }
+
+    fn set_title_ack(&mut self, ack: TitleAckFn) {
+        self.title_ack = Some(ack);
     }
 
     fn abort_handle(&self) -> AbortHandle {
@@ -254,24 +263,12 @@ fn normalize_mount(mount: &str) -> String {
     }
 }
 
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push_str(&format!("%{:02X}", b));
-            }
-        }
-    }
-    out
-}
+// Query encoding now lives in shoutcast_v1::url_encode (shared, canonical %20).
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::shoutcast_v1::url_encode;
 
     #[test]
     fn test_url_encode() {

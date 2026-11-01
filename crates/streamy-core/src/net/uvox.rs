@@ -12,8 +12,8 @@ use crate::core::framing::{adts_header, message};
 use crate::core::wire_safety::{header_value, strip_control_chars, truncate, MAX_HEADER_VALUE};
 use crate::core::xtea::encipher;
 use crate::net::client::{
-    connect_any, resolve, AbortHandle, SourceClient, SourceClientError, StationInfo,
-    HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
+    connect_any, resolve, AbortHandle, SourceClient, SourceClientError, StationInfo, TitleAck,
+    TitleAckFn, HANDSHAKE_TIMEOUT_MS, SEND_TIMEOUT_MS,
 };
 
 const CLOSE_JOIN_MS: u64 = 500;
@@ -37,6 +37,9 @@ pub struct UvoxClient {
 
     stream: Option<TcpStream>,
     abort: AbortHandle,
+    /// Where the server's verdict on a title push is reported (a clean write is
+    /// the honest maximum 0x902 offers — it has no ACK).
+    title_ack: Option<TitleAckFn>,
 }
 
 impl UvoxClient {
@@ -70,6 +73,7 @@ impl UvoxClient {
             station: StationInfo::default(),
             stream: None,
             abort: AbortHandle::default(),
+            title_ack: None,
         }
     }
 
@@ -125,6 +129,24 @@ impl UvoxClient {
 }
 
 impl SourceClient for UvoxClient {
+    fn clone_box(&self) -> Box<dyn SourceClient> {
+        Box::new(UvoxClient {
+            host: self.host.clone(),
+            port: self.port,
+            sid: self.sid,
+            password: self.password.clone(),
+            mime: self.mime.clone(),
+            sample_rate_hz: self.sample_rate_hz,
+            channels: self.channels,
+            dj_user: self.dj_user.clone(),
+            data_class: self.data_class,
+            data_type: self.data_type,
+            station: self.station.clone(),
+            stream: None,
+            abort: AbortHandle::default(),
+            title_ack: None,
+        })
+    }
     fn connect(
         &mut self,
         bitrate_kbps: u32,
@@ -252,10 +274,17 @@ impl SourceClient for UvoxClient {
         Ok(())
     }
 
+    /// Admin-free in-stream metadata via Ultravox class 3 / type 0x902. Live-verified
+    /// against DNAS2 2.6.1: one message with payload
+    /// `[MetadataID u16 BE][Span u16 BE][Index u16 BE][XML]` updates SONGTITLE with
+    /// NO admin creds. `<TIT2>title</TIT2>` alone sets SONGTITLE = title.
+    /// Reports the write's real outcome through the ack callback: `true` when the
+    /// message was written to the connected session — 0x902 has no ACK, so a clean
+    /// write is the honest maximum the wire offers; `false` when not connected
+    /// (deferred, replayed after the handshake) or the write failed.
     fn update_now_playing(&mut self, title: &str) -> Result<(), SourceClientError> {
-        let s = match self.stream.as_mut() {
-            Some(s) => s,
-            None => return Ok(()),
+        let Some(s) = self.stream.as_mut() else {
+            return Ok(()); // not connected yet: replayed after the handshake
         };
 
         let safe = strip_control_chars(title);
@@ -278,9 +307,16 @@ impl SourceClient for UvoxClient {
         payload[6..].copy_from_slice(xml_bytes);
 
         let msg = message(3, 0x902, &payload);
-        s.write_all(&msg)?;
-        s.flush()?;
-        Ok(())
+        let write = s.write_all(&msg).and_then(|_| s.flush());
+        if let Some(ack) = self.title_ack.as_ref() {
+            let ok = write.is_ok();
+            ack(TitleAck { title: safe_capped.clone(), ok });
+        }
+        write.map_err(SourceClientError::Io)
+    }
+
+    fn set_title_ack(&mut self, ack: TitleAckFn) {
+        self.title_ack = Some(ack);
     }
 
     fn abort_handle(&self) -> AbortHandle {

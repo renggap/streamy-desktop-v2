@@ -19,8 +19,10 @@ use crate::audio::source::AudioSource;
 use crate::core::audio_config_rules::{AudioConfig, AudioConfigRules, BroadcastMode, Codec, DjProtocol};
 use crate::core::backoff::MAX_ATTEMPTS;
 use crate::core::teardown_state::{resolve_teardown_state, StreamState, TransportState};
-use crate::net::client::{AbortHandle, SourceClient, StationInfo};
+use crate::net::client::{AbortHandle, SourceClient, StationInfo, TitleAck};
+use crate::net::fallback::FallbackSourceClient;
 use crate::net::icecast::IcecastSourceClient;
+use crate::net::shoutcast_v1::ShoutcastV1Client;
 use crate::net::transport::{ReconnectPolicy, StreamTransport};
 use crate::net::uvox::UvoxClient;
 use streamy_lame::Mp3Encoder;
@@ -108,6 +110,11 @@ pub struct StreamStats {
 
 type SharedClient = Arc<Mutex<Box<dyn SourceClient>>>;
 
+/// Where the session's title-verdict acks go (see [TitleAck]); the Tauri layer
+/// forwards them to the UI so a "Title updated" toast only appears when the
+/// server really took the title.
+pub type TitleAckCallback = Arc<dyn Fn(TitleAck) + Send + Sync>;
+
 struct Active {
     pipeline: AudioPipeline,
     transport: Arc<StreamTransport>,
@@ -141,6 +148,8 @@ pub struct StreamSession {
     is_recording: AtomicBool,
     recording_path: Mutex<Option<String>>,
     recording_since: Mutex<Option<Instant>>,
+    /// UI-facing now-playing verdict channel (set at start, per session).
+    title_ack: Mutex<TitleAckCallback>,
 }
 
 impl StreamSession {
@@ -158,7 +167,13 @@ impl StreamSession {
             is_recording: AtomicBool::new(false),
             recording_path: Mutex::new(None),
             recording_since: Mutex::new(None),
+            title_ack: Mutex::new(Arc::new(|_| {})),
         })
+    }
+
+    /// Set where title-verdict acks are reported. Must be called before start().
+    pub fn set_title_ack_callback(&self, cb: TitleAckCallback) {
+        *self.title_ack.lock() = cb;
     }
 
     pub fn state(&self) -> StreamState {
@@ -255,7 +270,7 @@ impl StreamSession {
         let mime = "audio/mpeg".to_string();
 
         let is_dj = profile.mode == BroadcastMode::DJ;
-        let source: Box<dyn SourceClient> = if !is_dj {
+        let mut source: Box<dyn SourceClient> = if !is_dj {
             Box::new(
                 UvoxClient::new(
                     profile.host.clone(),
@@ -278,20 +293,64 @@ impl StreamSession {
                 .clone()
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| profile.password.clone());
+            let dj_user = profile.dj_user.clone().filter(|u| !u.trim().is_empty());
             match profile.dj_protocol {
-                DjProtocol::ULTRAVOX => Box::new(
-                    UvoxClient::new(
-                        profile.host.clone(),
-                        dj_port,
-                        profile.sid,
-                        dj_password,
-                        mime,
-                        cfg.sample_rate_hz,
-                        channels,
-                        profile.dj_user.clone().filter(|u| !u.trim().is_empty()),
-                    )
-                    .with_station(station),
-                ),
+                DjProtocol::ULTRAVOX => {
+                    // SHOUTcast DJ ports come in several styles, all live-probed on Android:
+                    // panels may advertise a v1 login whose source port is the listed port + 1
+                    // (Centova / sc_trans2), others speak only Ultravox on the listed port, and
+                    // raw sc_trans opens djport2 at the listed port + 2 (Centova convention:
+                    // panel 8092, v1 on 8093, Ultravox DJ on 8094). An Ultravox DJ that only
+                    // tries the entered port dead-ends at sc_trans's Weblet, which stays SILENT
+                    // on binary handshakes -> a ~6 s timeout that looks like "connected, then
+                    // dropped after a few seconds". So try v1 on +1 first, then Ultravox on the
+                    // listed port, then Ultravox on +2. The wire is always MP3 here, so the v1
+                    // leg's MP3-only rule holds.
+                    let uvox = Box::new(
+                        UvoxClient::new(
+                            profile.host.clone(),
+                            dj_port,
+                            profile.sid,
+                            dj_password.clone(),
+                            mime.clone(),
+                            cfg.sample_rate_hz,
+                            channels,
+                            dj_user.clone(),
+                        )
+                        .with_station(station.dup()),
+                    ) as Box<dyn SourceClient>;
+                    let uvox_alt = if dj_port < 65_533 {
+                        Box::new(
+                            UvoxClient::new(
+                                profile.host.clone(),
+                                dj_port + 2,
+                                profile.sid,
+                                dj_password.clone(),
+                                mime.clone(),
+                                cfg.sample_rate_hz,
+                                channels,
+                                dj_user.clone(),
+                            )
+                            .with_station(station.dup()),
+                        ) as Box<dyn SourceClient>
+                    } else {
+                        uvox.clone_box()
+                    };
+                    let ultravox_chain =
+                        Box::new(FallbackSourceClient::new(uvox, uvox_alt)) as Box<dyn SourceClient>;
+                    if dj_port < 65_535 {
+                        let v1 = Box::new(ShoutcastV1Client::new(
+                            profile.host.clone(),
+                            dj_port + 1,
+                            dj_user.clone().unwrap_or_default(),
+                            dj_password,
+                            dj_port, // titles: admin.cgi on the listed (panel) port
+                        )) as Box<dyn SourceClient>;
+                        Box::new(FallbackSourceClient::new(v1, ultravox_chain))
+                    } else {
+                        ultravox_chain
+                    }
+                }
                 DjProtocol::ICECAST => Box::new(
                     IcecastSourceClient::new(
                         profile.host.clone(),
@@ -305,6 +364,11 @@ impl StreamSession {
                 ),
             }
         };
+
+        // The source reports the server's verdict on every title push; the UI
+        // toasts from that, never from an assumption.
+        let title_ack_cb = self.title_ack.lock().clone();
+        source.set_title_ack(Arc::new(move |ack| title_ack_cb(ack)));
 
         let abort = source.abort_handle();
         let client: SharedClient = Arc::new(Mutex::new(source));

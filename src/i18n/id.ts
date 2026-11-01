@@ -60,6 +60,7 @@ export const id: Record<TranslationKey, string> = {
   nowPlayingCurrent: "Pendengar melihat: {title}",
   nowPlayingQueued: "Akan dikirim saat mengudara: {title}",
   toastTitleSent: "Judul diperbarui untuk pendengar.",
+  toastTitleFailed: "Gagal memperbarui judul di server.",
   toastTitleQueued: "Judul disimpan. Akan dikirim saat mengudara.",
 
   // Recording
