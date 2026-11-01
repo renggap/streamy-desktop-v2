@@ -434,6 +434,11 @@ impl StreamSession {
                 if let Some(t) = title {
                     if let Err(e) = cl.update_now_playing(&t) {
                         tracing::warn!("now-playing update failed: {e}");
+                        // The push died on the wire (e.g. a failing 0x902 write on
+                        // a dying socket): keep the title pending so the next
+                        // frame — or the reconnect's replay — tries again instead
+                        // of silently dropping it.
+                        np_send.pending.store(true, Ordering::SeqCst);
                     }
                 }
             }

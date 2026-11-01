@@ -1244,3 +1244,86 @@ fn v1_stalled_server_write_errors_within_bound() {
     assert!(t0.elapsed() < Duration::from_secs(5), "send not bounded");
     srv.join().unwrap();
 }
+
+#[test]
+fn fallback_stays_sticky_on_its_protocol_across_a_real_drop() {
+    // Sticky contract with REAL sockets: after the v1 leg connects and the
+    // server drops us, the reconnect must go to v1 AGAIN (not flap to uvox —
+    // flapping would alternate two DJ sessions taking over the station).
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p_addr = panel.local_addr().unwrap();
+    let s_addr = source.local_addr().unwrap();
+
+    let logins = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let logins2 = logins.clone();
+    let src = thread::spawn(move || {
+        source.set_nonblocking(true).unwrap();
+        let mut served = 0;
+        while served < 2 {
+            let Ok((mut s, _)) = source.accept() else {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            };
+            let _ = s.set_nonblocking(false);
+            let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+            let login = read_line_crude(&mut s);
+            logins2.lock().unwrap().push(login);
+            let _ = s.write_all(b"OK2\r\nicy-caps:11\r\n\r\n");
+            let _ = s.flush();
+            let mut b = [0u8; 1];
+            let mut headers = Vec::new();
+            while s.read_exact(&mut b).is_ok() {
+                headers.push(b[0]);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let mut audio = [0u8; 64];
+            let _ = s.read(&mut audio);
+            served += 1;
+            // first connection ends here (drop); second stays open till test end
+        }
+    });
+    // A live Ultravox server that must NEVER be contacted (sticky proof).
+    let uvox_l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let uvox_port = uvox_l.local_addr().unwrap().port();
+    let uvox_contacted = Arc::new(AtomicBool::new(false));
+    let uvox_contacted2 = uvox_contacted.clone();
+    let uvox_srv = thread::spawn(move || {
+        uvox_l.set_nonblocking(true).unwrap();
+        loop {
+            match uvox_l.accept() {
+                Ok((mut s, _)) => {
+                    uvox_contacted2.store(true, Ordering::SeqCst);
+                    let _ = s.shutdown(std::net::Shutdown::Both);
+                }
+                Err(_) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    });
+
+    let v1 = Box::new(ShoutcastV1Client::new(
+        s_addr.ip().to_string(), s_addr.port(), "dj".into(), "pw".into(), p_addr.port(),
+    )) as Box<dyn SourceClient>;
+    let uvox = Box::new(streamy_core::net::uvox::UvoxClient::new(
+        "127.0.0.1".into(), uvox_port,
+        1, "pw".into(), "audio/mpeg".into(), 44_100, 1, None,
+    )) as Box<dyn SourceClient>;
+    let mut chain = FallbackSourceClient::new(v1, uvox);
+
+    chain.connect(64, "Station", "Talk").expect("v1 leg connects");
+    chain.send(&[9u8; 64]).expect("send 1");
+    thread::sleep(Duration::from_millis(150)); // server dropped us
+    chain.connect(64, "Station", "Talk").expect("sticky v1 reconnect");
+    chain.send(&[9u8; 64]).expect("send 2");
+
+    let logins = logins.lock().unwrap();
+    assert_eq!(logins.len(), 2, "exactly two v1 logins: {logins:?}");
+    assert!(!uvox_contacted.load(Ordering::SeqCst), "fallback flapped to uvox");
+
+    // Detach the mock threads (uvox_srv loops forever by design): the test
+    // binary exits when main returns; listeners drop with the threads' handles.
+    drop(src);
+    drop(uvox_srv);
+}
