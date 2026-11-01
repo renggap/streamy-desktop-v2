@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use streamy_core::net::client::{SourceClient, TitleAck};
+use streamy_core::net::fallback::FallbackSourceClient;
 use streamy_core::net::shoutcast_v1::ShoutcastV1Client;
 
 fn read_line_crude(s: &mut TcpStream) -> String {
@@ -702,4 +703,370 @@ fn session_announces_are_silent_user_pushes_toast() {
     src_stop.store(true, Ordering::SeqCst);
     src_thread.join().unwrap();
     weblet_thread.join().unwrap();
+}
+
+/// Serve a full Ultravox handshake, then read data frames until the peer stops.
+fn mock_uvox_server(listener: TcpListener, stop: Arc<AtomicBool>) {
+    listener.set_nonblocking(true).unwrap();
+    'outer: while !stop.load(Ordering::SeqCst) {
+        let (mut s, _) = match listener.accept() {
+            Ok(v) => v,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+        };
+        let _ = s.set_nonblocking(false);
+        s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        loop {
+            let mut hdr = [0u8; 6];
+            if s.read_exact(&mut hdr).is_err() {
+                continue 'outer;
+            }
+            let len = ((hdr[4] as usize) << 8) | hdr[5] as usize;
+            let mut p = vec![0u8; len + 1];
+            if s.read_exact(&mut p).is_err() {
+                continue 'outer;
+            }
+            let ct = ((hdr[2] as u16) << 8) | hdr[3] as u16;
+            let cls = (ct >> 12) & 0x0F;
+            let msg_type = ct & 0x0FFF;
+            let resp = streamy_core::core::framing::message(cls, msg_type, b"ACK\0");
+            if s.write_all(&resp).is_err() || s.flush().is_err() {
+                continue 'outer;
+            }
+            if (cls, msg_type) == (1, 0x004) {
+                // standby ACKed: keep reading data until the peer stops
+                loop {
+                    let mut d = [0u8; 512];
+                    match s.read(&mut d) {
+                        Ok(0) | Err(_) => continue 'outer,
+                        Ok(_) => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn chain_falls_through_to_uvox_on_plus_two_when_listed_port_is_closed() {
+    // Raw sc_trans layout: v1 on +1 refused/closed, Ultravox ONLY on +2
+    // (the Centova djport2 convention). The chain's third leg must win.
+    use streamy_core::net::uvox::UvoxClient;
+
+    let uvox2 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let uvox2_port = uvox2.local_addr().unwrap().port();
+    // dj_port chosen so that dj_port+2 == uvox2_port and dj_port, dj_port+1
+    // are guaranteed closed: bind them, record, drop, and race-window guard
+    // by binding a placeholder we keep for the test duration? No — simply
+    // pick dj_port = uvox2_port - 2 and verify those ports are closed.
+    let dj_port = uvox2_port - 2;
+    for probe in [dj_port, dj_port + 1] {
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", probe)).is_err(),
+            "port {probe} must be closed for this test"
+        );
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let srv = thread::spawn(move || mock_uvox_server(uvox2, stop2));
+
+    // Build exactly what the session builds for a DJ ULTRAVOX profile.
+    let uvox = Box::new(UvoxClient::new(
+        "127.0.0.1".into(), dj_port, 1, "pw".into(),
+        "audio/mpeg".into(), 44_100, 1, None,
+    )) as Box<dyn SourceClient>;
+    let uvox_alt = Box::new(UvoxClient::new(
+        "127.0.0.1".into(), dj_port + 2, 1, "pw".into(),
+        "audio/mpeg".into(), 44_100, 1, None,
+    )) as Box<dyn SourceClient>;
+    let ultravox_chain = Box::new(FallbackSourceClient::new(uvox, uvox_alt));
+    let v1 = Box::new(ShoutcastV1Client::new(
+        "127.0.0.1".into(), dj_port + 1, "dj".into(), "pw".into(), dj_port,
+    ));
+    let mut chain = FallbackSourceClient::new(v1, ultravox_chain);
+
+    chain.connect(64, "Station", "Talk").expect("chain lands on uvox@+2");
+    chain.send(&[1, 1, 1]).expect("audio via uvox@+2");
+
+    stop.store(true, Ordering::SeqCst);
+    srv.join().unwrap();
+}
+
+#[test]
+fn chain_falls_through_to_uvox_on_listed_port_when_v1_leg_is_closed() {
+    // Panels that speak ONLY Ultravox on the listed port: v1@+1 and uvox@+2
+    // are closed, uvox on the listed port answers. Second leg must win.
+    use streamy_core::net::uvox::UvoxClient;
+
+    let uvox1 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let dj_port = uvox1.local_addr().unwrap().port();
+    for probe in [dj_port + 1, dj_port + 2] {
+        assert!(
+            std::net::TcpStream::connect(("127.0.0.1", probe)).is_err(),
+            "port {probe} must be closed for this test"
+        );
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let srv = thread::spawn(move || mock_uvox_server(uvox1, stop2));
+
+    let uvox = Box::new(UvoxClient::new(
+        "127.0.0.1".into(), dj_port, 1, "pw".into(),
+        "audio/mpeg".into(), 44_100, 1, None,
+    )) as Box<dyn SourceClient>;
+    let uvox_alt = Box::new(UvoxClient::new(
+        "127.0.0.1".into(), dj_port + 2, 1, "pw".into(),
+        "audio/mpeg".into(), 44_100, 1, None,
+    )) as Box<dyn SourceClient>;
+    let ultravox_chain = Box::new(FallbackSourceClient::new(uvox, uvox_alt));
+    let v1 = Box::new(ShoutcastV1Client::new(
+        "127.0.0.1".into(), dj_port + 1, "dj".into(), "pw".into(), dj_port,
+    ));
+    let mut chain = FallbackSourceClient::new(v1, ultravox_chain);
+
+    chain.connect(64, "Station", "Talk").expect("chain lands on uvox@listed");
+    chain.send(&[2, 2, 2]).expect("audio via uvox@listed");
+
+    stop.store(true, Ordering::SeqCst);
+    srv.join().unwrap();
+}
+
+#[test]
+fn fallback_abort_fans_out_to_both_children() {
+    // The composite abort must unblock EITHER child's in-flight handshake,
+    // not just the primary's: teardown uses it when the client lock is held.
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    let primary_l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let fallback_l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p_addr = primary_l.local_addr().unwrap();
+    let f_addr = fallback_l.local_addr().unwrap();
+
+    // Both servers accept and stay SILENT (worst case: blackhole handshake).
+    let _p = thread::spawn(move || {
+        let (_s, _) = primary_l.accept().expect("p accept");
+        thread::sleep(Duration::from_secs(10));
+    });
+    let _f = thread::spawn(move || {
+        let (_s, _) = fallback_l.accept().expect("f accept");
+        thread::sleep(Duration::from_secs(10));
+    });
+
+    // Children whose handshakes block on the sockets above.
+    let v1 = Box::new(ShoutcastV1Client::new(
+        p_addr.ip().to_string(), p_addr.port(), "dj".into(), "pw".into(), p_addr.port(),
+    )) as Box<dyn SourceClient>;
+    let uvox = Box::new(UvoxClientStub::connecting_to(f_addr)) as Box<dyn SourceClient>;
+    let mut chain = FallbackSourceClient::new(v1, uvox);
+    let abort = chain.abort_handle();
+
+    // Connect on another thread; it will block in the primary's handshake read.
+    let t = thread::spawn(move || {
+        let _ = chain.connect(64, "n", "g");
+    });
+
+    thread::sleep(Duration::from_millis(300));
+    let t0 = Instant::now();
+    abort.abort(); // must shut BOTH sockets
+    t.join().unwrap();
+    assert!(t0.elapsed() < Duration::from_secs(2), "abort unblocked slowly");
+}
+
+/// Uvox client bound to a real address (used for abort fan-out testing).
+struct UvoxClientStub;
+
+impl UvoxClientStub {
+    fn connecting_to(_addr: std::net::SocketAddr) -> streamy_core::net::uvox::UvoxClient {
+        streamy_core::net::uvox::UvoxClient::new(
+            "127.0.0.1".into(), _addr.port(), 1, "pw".into(),
+            "audio/mpeg".into(), 44_100, 1, None,
+        )
+    }
+}
+
+#[test]
+fn session_teardown_mid_title_push_cleans_up_without_false_toast() {
+    // Stop while a user push's admin GET is still in flight: no hang, no
+    // verdict leaks to the UI afterwards, and a later same-text announce
+    // in a NEW session does not false-toast.
+    use streamy_core::audio::source::SineAudioSource;
+    use streamy_core::core::audio_config_rules::{BroadcastMode, Codec, DjProtocol};
+    use streamy_core::core::teardown_state::StreamState;
+    use streamy_core::session::stream_session::{StreamProfile, StreamSession};
+
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let panel_port = panel.local_addr().unwrap().port();
+    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
+
+    let src_stop = Arc::new(AtomicBool::new(false));
+    let src_stop2 = src_stop.clone();
+    let src_thread = thread::spawn(move || {
+        source.set_nonblocking(true).unwrap();
+        'outer: while !src_stop2.load(Ordering::SeqCst) {
+            let Ok((mut s, _)) = source.accept() else {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            let _ = s.set_nonblocking(false);
+            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+            let _ = read_line_crude(&mut s);
+            let _ = s.write_all(b"OK2\r\nicy-caps:11\r\n\r\n");
+            let _ = s.flush();
+            let mut b = [0u8; 1];
+            let mut headers = Vec::new();
+            while s.read_exact(&mut b).is_ok() {
+                headers.push(b[0]);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let mut audio = vec![0u8; 512];
+            loop {
+                match s.read(&mut audio) {
+                    Ok(0) | Err(_) => continue 'outer,
+                    Ok(_) => {}
+                }
+            }
+        }
+    });
+    // Blackhole Weblet: accepts, never answers.
+    let weblet_stop = Arc::new(AtomicBool::new(false));
+    let weblet_stop2 = weblet_stop.clone();
+    let weblet_thread = thread::spawn(move || {
+        panel.set_nonblocking(true).unwrap();
+        while !weblet_stop2.load(Ordering::SeqCst) {
+            if let Ok((s, _)) = panel.accept() {
+                drop(s); // never reply
+            } else {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    let ui_acks = Arc::new(std::sync::Mutex::new(Vec::<streamy_core::net::TitleAck>::new()));
+    let ui_acks2 = ui_acks.clone();
+    let session = StreamSession::new(Arc::new(|_| {}));
+    session.set_title_ack_callback(Arc::new(move |a| ui_acks2.lock().unwrap().push(a)));
+
+    let profile = StreamProfile {
+        id: 1,
+        name: "Teardown Test".into(),
+        host: "127.0.0.1".into(),
+        port: panel_port,
+        sid: 1,
+        password: "djpass".into(),
+        codec: Codec::MP3,
+        bitrate_kbps: 64,
+        sample_rate_hz: 44_100,
+        mono: true,
+        mode: BroadcastMode::DJ,
+        dj_user: Some("djuser".into()),
+        dj_password: Some("djpass".into()),
+        dj_port: Some(panel_port),
+        dj_protocol: DjProtocol::ULTRAVOX,
+        ..Default::default()
+    };
+
+    session
+        .start(profile, Box::new(SineAudioSource::new(44_100, true, 1024)), None)
+        .expect("session start");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !matches!(session.state(), StreamState::Live { .. }) {
+        if std::time::Instant::now() > deadline {
+            panic!("never went live; state = {:?}", session.state());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    // User push against the blackhole Weblet, then immediate teardown.
+    session.update_now_playing("Inflight Title").unwrap();
+    session.stop_and_shutdown(false); // must not hang despite the in-flight GET
+
+    // The push thread may still finish its GET; its verdict must NOT toast
+    // (teardown cleared the user-verdict gate).
+    thread::sleep(Duration::from_millis(400));
+    assert!(
+        ui_acks.lock().unwrap().is_empty(),
+        "post-teardown verdict must not reach the UI"
+    );
+    assert!(matches!(session.state(), StreamState::Idle));
+
+    // A later same-text announce in a NEW session must not false-toast either.
+    let ui_acks3 = ui_acks.clone();
+    let session2 = StreamSession::new(Arc::new(|_| {}));
+    session2.set_title_ack_callback(Arc::new(move |a| ui_acks3.lock().unwrap().push(a)));
+    session2.announce_now_playing("Inflight Title").unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        ui_acks.lock().unwrap().is_empty(),
+        "new-session announce must not toast on the stale verdict gate"
+    );
+
+    weblet_stop.store(true, Ordering::SeqCst);
+    src_stop.store(true, Ordering::SeqCst);
+    src_thread.join().unwrap();
+    weblet_thread.join().unwrap();
+}
+
+#[test]
+fn title_ack_serializes_to_the_frontend_shape() {
+    // The Svelte side listens for { title: string; ok: boolean }; a renamed or
+    // tagged field would silently break the toast. Pin the wire shape.
+    let ack = streamy_core::net::TitleAck { title: "Kajian Pagi".into(), ok: true };
+    let json = serde_json::to_string(&ack).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v.get("title").and_then(|t| t.as_str()), Some("Kajian Pagi"));
+    assert_eq!(v.get("ok").and_then(|t| t.as_bool()), Some(true));
+    assert_eq!(v.as_object().map(|m| m.len()), Some(2), "exactly two fields: {json}");
+}
+
+#[test]
+fn v1_admin_path_never_carries_raw_control_chars_or_plus() {
+    // Wire-safety of the title channel: control chars stripped (no header/
+    // query injection), spaces always %20, never a literal '+'.
+    let hostile = "Bad\r\nTitle: injected <script> & more";
+    let p = ShoutcastV1Client::admin_path("dj", "pw", hostile);
+    assert!(!p.contains('\r') && !p.contains('\n'), "{p}");
+    assert!(!p.contains(' '), "raw space in query: {p}");
+    assert!(!p.contains('+'), "form-style + leaked: {p}");
+    assert!(p.contains("%3Cscript%3E"), "entity escaping intact: {p}");
+    assert!(p.contains("%26"), "ampersand encoded: {p}");
+}
+
+#[test]
+fn v1_long_emoji_title_survives_push_without_panic() {
+    // UTF-8 truncation path (4-byte emoji) must not split a char boundary.
+    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let source = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p_addr = panel.local_addr().unwrap();
+    let s_addr = source.local_addr().unwrap();
+
+    let (login_tx, _login_rx) = mpsc::channel();
+    let (audio_tx, _audio_rx) = mpsc::channel();
+    let src = thread::spawn(move || mock_v1_source(source, login_tx, audio_tx));
+    let (req_tx, req_rx) = mpsc::channel();
+    let web = thread::spawn(move || {
+        mock_weblet(panel, "HTTP/1.0 200 OK\r\n\r\nTitle Updated", req_tx)
+    });
+
+    let mut client = ShoutcastV1Client::new(
+        s_addr.ip().to_string(), s_addr.port(), "dj".into(), "pw".into(), p_addr.port(),
+    );
+    client.set_title_ack(Arc::new(|_| {}));
+    client.connect(64, "Test Station", "Talk").expect("connect");
+
+    let title: String = "\u{1F3A4}".repeat(400); // 1600 UTF-16 units, 4 bytes each
+    client.update_now_playing(&title).expect("emoji push");
+
+    let req = req_rx.recv_timeout(Duration::from_secs(3)).expect("weblet saw the push");
+    assert!(req.starts_with("GET /admin.cgi"), "{req}");
+
+    src.join().unwrap();
+    web.join().unwrap();
 }

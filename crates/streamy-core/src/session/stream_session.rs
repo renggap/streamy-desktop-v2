@@ -712,6 +712,9 @@ impl StreamSession {
         self.is_recording.store(false, Ordering::SeqCst);
         *self.recording_since.lock() = None;
         *self.live_since.lock() = None;
+        // The session this pending user-verdict belonged to is gone; a later
+        // same-text announce from the next session must not false-toast.
+        *self.user_ack_title.lock() = None;
 
         // Capture first: the encoder flush enqueues the trailing frame(s).
         active.pipeline.disarm_record();

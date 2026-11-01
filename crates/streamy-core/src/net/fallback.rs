@@ -10,6 +10,7 @@
 //! station in turn.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::net::client::{
     AbortHandle, SourceClient, SourceClientError, TitleAckFn,
@@ -28,12 +29,18 @@ pub struct FallbackSourceClient {
     fallback_abort: AbortHandle,
     active: AtomicUsize,
     closed: AtomicBool,
+    /// Set by the composite abort() — distinct from close(): teardown calls
+    /// abort() alone when the client lock is held, and the connect() loop must
+    /// not start the second leg's handshake after it (it would hold the DJ
+    /// slot for its own handshake timeout).
+    aborted: Arc<AtomicBool>,
 }
 
 impl FallbackSourceClient {
     pub fn new(primary: Box<dyn SourceClient>, fallback: Box<dyn SourceClient>) -> Self {
         let primary_abort = primary.abort_handle();
         let fallback_abort = fallback.abort_handle();
+        let aborted = Arc::new(AtomicBool::new(false));
         Self {
             primary,
             fallback,
@@ -41,6 +48,7 @@ impl FallbackSourceClient {
             fallback_abort,
             active: AtomicUsize::new(NONE),
             closed: AtomicBool::new(false),
+            aborted,
         }
     }
 
@@ -76,8 +84,9 @@ impl SourceClient for FallbackSourceClient {
             }
             Err(e) => e,
         };
-        if self.closed.load(Ordering::SeqCst) {
-            // Stop arrived mid-attempt: don't start a second handshake.
+        if self.closed.load(Ordering::SeqCst) || self.aborted.load(Ordering::SeqCst) {
+            // Stop (or teardown's abort) arrived mid-attempt: don't start a
+            // second handshake that would hold the DJ slot until IT times out.
             return Err(first);
         }
         match self.fallback.connect(bitrate_kbps, name, genre) {
@@ -107,12 +116,15 @@ impl SourceClient for FallbackSourceClient {
         self.fallback.set_title_ack(ack);
     }
 
-    /// Merged abort: shuts both children's sockets, whichever is live.
+    /// Merged abort: shuts both children's sockets, whichever is live, and
+    /// stops an in-flight connect() from starting its second leg.
     fn abort_handle(&self) -> AbortHandle {
         let primary = self.primary_abort.clone();
         let fallback = self.fallback_abort.clone();
+        let aborted = self.aborted.clone();
         let mut inner = AbortHandle::default();
         inner.set_abort(Box::new(move || {
+            aborted.store(true, Ordering::SeqCst);
             primary.abort();
             fallback.abort();
         }));
