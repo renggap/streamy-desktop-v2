@@ -1327,3 +1327,142 @@ fn fallback_stays_sticky_on_its_protocol_across_a_real_drop() {
     drop(src);
     drop(uvox_srv);
 }
+
+#[test]
+fn session_uvox_title_replays_after_server_drop() {
+    // A title set while live, then the server drops: after the transport
+    // reconnects, the title must go out again (0x902 replay) — the listeners'
+    // now-playing survives the blip.
+    use streamy_core::audio::source::SineAudioSource;
+    use streamy_core::core::audio_config_rules::{BroadcastMode, Codec, DjProtocol};
+    use streamy_core::core::framing::message;
+    use streamy_core::core::teardown_state::StreamState;
+    use streamy_core::session::stream_session::{StreamProfile, StreamSession};
+
+    // uvox server on the listed DJ port; +1/+2 stay closed so the chain's
+    // first attempt (v1@+1) fails fast and uvox wins.
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let dj_port = l.local_addr().unwrap().port();
+
+    let titles = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let titles2 = titles.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let srv = thread::spawn(move || {
+        l.set_nonblocking(true).unwrap();
+        let mut served = 0;
+        while !stop2.load(Ordering::SeqCst) {
+            let Ok((mut s, _)) = l.accept() else {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            };
+            let _ = s.set_nonblocking(false);
+            s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            // full handshake: ACK everything to standby
+            loop {
+                let mut hdr = [0u8; 6];
+                if s.read_exact(&mut hdr).is_err() {
+                    break;
+                }
+                let len = ((hdr[4] as usize) << 8) | hdr[5] as usize;
+                let mut p = vec![0u8; len + 1];
+                if s.read_exact(&mut p).is_err() {
+                    break;
+                }
+                let ct = ((hdr[2] as u16) << 8) | hdr[3] as u16;
+                let cls = (ct >> 12) & 0x0F;
+                let msg_type = ct & 0x0FFF;
+                let resp = message(cls, msg_type, b"ACK\0");
+                if s.write_all(&resp).is_err() {
+                    break;
+                }
+                let _ = s.flush();
+                if (cls, msg_type) == (1, 0x004) {
+                    break; // standby done
+                }
+            }
+            served += 1;
+            // stream: read until a 0x902 metadata frame or the peer drops
+            let mut saw_title = false;
+            loop {
+                let mut hdr = [0u8; 6];
+                if s.read_exact(&mut hdr).is_err() {
+                    break;
+                }
+                let len = ((hdr[4] as usize) << 8) | hdr[5] as usize;
+                let mut p = vec![0u8; len + 1];
+                if s.read_exact(&mut p).is_err() {
+                    break;
+                }
+                let ct = ((hdr[2] as u16) << 8) | hdr[3] as u16;
+                let cls = (ct >> 12) & 0x0F;
+                let msg_type = ct & 0x0FFF;
+                if (cls, msg_type) == (3, 0x902) {
+                    let xml = String::from_utf8_lossy(&p[6..]).to_string();
+                    if let Some(t) = xml.split("<TIT2>").nth(1).and_then(|r| r.split("</TIT2>").next()) {
+                        titles2.lock().unwrap().push(t.to_string());
+                    }
+                    saw_title = true;
+                }
+                if saw_title && served == 1 {
+                    // drop right after the first title: force the reconnect
+                    break;
+                }
+            }
+        }
+    });
+
+    let session = StreamSession::new(Arc::new(|_| {}));
+    let profile = StreamProfile {
+        id: 1,
+        name: "Uvox Replay".into(),
+        host: "127.0.0.1".into(),
+        port: dj_port,
+        sid: 1,
+        password: "pw".into(),
+        codec: Codec::MP3,
+        bitrate_kbps: 64,
+        sample_rate_hz: 44_100,
+        mono: true,
+        mode: BroadcastMode::DJ,
+        dj_user: None,
+        dj_password: Some("pw".into()),
+        dj_port: Some(dj_port),
+        dj_protocol: DjProtocol::ULTRAVOX,
+        auto_reconnect: true,
+        ..Default::default()
+    };
+
+    session
+        .start(profile, Box::new(SineAudioSource::new(44_100, true, 1024)), None)
+        .expect("start");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !matches!(session.state(), StreamState::Live { .. }) {
+        if std::time::Instant::now() > deadline {
+            panic!("never live: {:?}", session.state());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    session.update_now_playing("Survives Drop").unwrap();
+
+    // Wait for TWO arrivals of the same title (original + post-reconnect replay).
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let seen = titles.lock().unwrap().len();
+        if seen >= 2 {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("title replay missing: {:?}", titles.lock().unwrap());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let got = titles.lock().unwrap();
+    assert!(got.iter().all(|t| t == "Survives Drop"), "{got:?}");
+
+    session.stop_and_shutdown(false);
+    stop.store(true, Ordering::SeqCst);
+    drop(srv);
+}
