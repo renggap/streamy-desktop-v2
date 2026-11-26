@@ -3,7 +3,12 @@ project(libmp3lame C)
 
 set(CMAKE_C_STANDARD 99)
 
+# LAME sources `#include <config.h>`. None lives next to the sources (quoted
+# includes search the including file's directory first), so copy the right one
+# into the build dir and put that first on the include path.
+configure_file(vendor/lame/configMS.h ${CMAKE_CURRENT_BINARY_DIR}/config.h COPYONLY)
 include_directories(
+    ${CMAKE_CURRENT_BINARY_DIR}
     vendor/lame/include
     vendor/lame/libmp3lame
 )

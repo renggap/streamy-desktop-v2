@@ -77,7 +77,11 @@ if ((Test-Path $CmakeLists) -and (Get-Command cmake -ErrorAction SilentlyContinu
     } | Select-Object -ExpandProperty FullName
 
     $DefFile = "$LameCrate\lame.def"
-    $CFlags = "/O2 /W0 /DHAVE_CONFIG_H /I`"$LibSrc`" /I`"$IncDir`" /c /Fo`"$ObjDir\\`""
+    # config.h must not sit next to the sources (quoted includes search the
+    # including file's directory first); generate it into $ObjDir and put that
+    # first on the include path, like upstream's Makefile.MSVC does.
+    Copy-Item "$LameCrate\vendor\lame\configMS.h" "$ObjDir\config.h" -Force
+    $CFlags = "/O2 /W0 /DHAVE_CONFIG_H /I`"$ObjDir`" /I`"$LibSrc`" /I`"$IncDir`" /c /Fo`"$ObjDir\\`""
     foreach ($src in $Sources) {
         Invoke-Expression "cl $CFlags `"$src`""
     }

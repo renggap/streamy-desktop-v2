@@ -35,6 +35,14 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/lame");
     println!("cargo:rerun-if-changed=lame.def");
 
+    // LAME sources `#include <config.h>`. Upstream ships configMS.h for MSVC and
+    // generates config.h via ./configure elsewhere; we ship both as config_*.h
+    // and copy the right one into OUT_DIR so no config.h lives next to the
+    // sources (quoted includes search the including file's directory first).
+    let config_src = if target.contains("windows") { "configMS.h" } else { "config_unix.h" };
+    std::fs::copy(manifest_dir.join("vendor").join("lame").join(config_src), out_dir.join("config.h"))
+        .expect("copy LAME config header");
+
     let prebuilt_dist = manifest_dir.join("..").join("..").join("target").join("lame-dist");
     if target.contains("windows")
         && prebuilt_dist.join("mp3lame.lib").exists()
@@ -48,6 +56,7 @@ fn main() {
     }
 
     let mut build = cc::Build::new();
+    build.include(&out_dir);
     build.include(&lib_src);
     build.include(&inc_dir);
     build.define("HAVE_CONFIG_H", None);

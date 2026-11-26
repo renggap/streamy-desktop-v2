@@ -4,7 +4,7 @@ Windows desktop app (Tauri 2 + Rust + Svelte 5) that streams the microphone (wit
 
 ## Hard Rules & Principles
 
-- **LAME is LGPL.** Vendored under `crates/streamy-lame/vendor/lame`. Kept as a separate dynamically-loaded/shared library (`lame_enc.dll` on Windows, `.so` for Linux dev). Preserves `crates/streamy-lame/lame_notice.txt` and relinkability instructions in `scripts/README-relink.md`.
+- **LAME is LGPL.** Vendored under `crates/streamy-lame/vendor/lame` (encoder-only subset of LAME 4.1beta1: `include/` + `libmp3lame/*.c,*.h`, plus `configMS.h`/`config_unix.h`; no `vector/`, no `mpglib`). Kept as a separate dynamically-loaded/shared library (`libmp3lame.dll` on Windows, `.so` for Linux dev). `config.h` is never committed next to the sources: `build.rs`, `CMakeLists.txt` and `scripts/build-lame-dll.ps1` copy the platform's `config_*.h` into the build dir first on the include path (upstream `Makefile.MSVC` recipe). Preserves `crates/streamy-lame/lame_notice.txt` and relinkability instructions in `scripts/README-relink.md`.
 - **Protocol behavior is pinned by golden vectors and live tests.** Ultravox handshake, XTEA cipher, ADTS-wrapped AAC, and in-stream `0x902` XML metadata are pinned byte-for-byte by golden vectors (`UvoxXteaTest`).
 - **Teardown & idempotency discipline.** Single idempotent teardown paths, race guards, bounded joins (500 ms) on network closes, no leaked sockets, threads, or encoder handles.
 - **Secrets stay in Credential Manager / env only.** Passwords never logged in plaintext. Windows Credential Manager stores passwords per profile ID. Logs redact Basic auth tokens and password fields.
@@ -26,7 +26,7 @@ streamy-desktop-v2/
                                    player, mic/playlist switch, RNNoise mic processor (nnnoiseless)
       src/session/                 stream_session, record_session
       tests/                       Golden vector unit tests, mock servers, session lifecycle
-    streamy-lame/                  Vendored LAME 3.100 (encoder-only) + safe Rust FFI wrapper
+    streamy-lame/                  Vendored LAME 4.1beta1 (encoder-only) + safe Rust FFI wrapper
   src-tauri/                       Windows desktop shell
     src/audio_cpal.rs              WASAPI AudioSource via cpal: noise suppression + rubato resampling
     src/audio_out.rs               Speaker monitoring of the playlist (cpal output)
@@ -96,7 +96,7 @@ Signing: the updater's public key is in `src-tauri/tauri.conf.json`. The private
 ## LGPL Relinking & Replacement
 
 In compliance with the GNU LGPL v2.1 for LAME MP3 Encoder:
-- The LAME encoder is compiled as a standalone dynamic library (`lame_enc.dll`).
+- The LAME encoder is compiled as a standalone dynamic library (`libmp3lame.dll`).
 - End-users can compile their own custom or modified LAME DLL using `scripts/build-lame-dll.ps1` and drop it into the application installation directory.
 - Detailed relinking instructions are provided in `scripts/README-relink.md` and accessible directly in the app's **Settings > License & Relinking (LGPL)** tab.
 

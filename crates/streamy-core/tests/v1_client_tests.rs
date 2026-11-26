@@ -26,6 +26,21 @@ fn read_line_crude(s: &mut TcpStream) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// Panel on an ephemeral port and its v1 source on panel+1, as the test layout
+/// requires. Ephemeral allocation occasionally lands next to a busy port, so
+/// retry with a fresh panel until both fit.
+fn bind_panel_and_v1() -> (TcpListener, TcpListener) {
+    loop {
+        let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = panel.local_addr().unwrap().port();
+        match TcpListener::bind(("127.0.0.1", port + 1)) {
+            Ok(source) => return (panel, source),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => drop(panel),
+            Err(e) => panic!("bind v1 port: {e}"),
+        }
+    }
+}
+
 /// Mock sc_trans v1 port: expects `user:pass` login, answers OK2 + caps, then
 /// reads raw MP3 bytes. Returns what it received.
 fn mock_v1_source(listener: TcpListener, login_rx: mpsc::Sender<String>, audio_rx: mpsc::Sender<Vec<u8>>) {
@@ -409,10 +424,8 @@ fn session_dj_ultravox_builds_v1_first_chain_and_reports_verdict() {
     use streamy_core::session::stream_session::{StreamProfile, StreamSession};
 
     // Panel port: the Weblet (title channel).
-    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (panel, source) = bind_panel_and_v1();
     let panel_port = panel.local_addr().unwrap().port();
-    // v1 source port = panel + 1 in the test's layout: bind it explicitly.
-    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
     // The uvox candidates (panel port and panel+2) must REFUSE or stay closed
     // so the chain proves it picked the v1 leg first. Bind them to nothing:
     // a closed port errors fast with ECONNREFUSED on loopback.
@@ -572,9 +585,8 @@ fn session_announces_are_silent_user_pushes_toast() {
     use streamy_core::core::teardown_state::StreamState;
     use streamy_core::session::stream_session::{StreamProfile, StreamSession};
 
-    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (panel, source) = bind_panel_and_v1();
     let panel_port = panel.local_addr().unwrap().port();
-    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
 
     let src_stop = Arc::new(AtomicBool::new(false));
     let src_stop2 = src_stop.clone();
@@ -899,9 +911,8 @@ fn session_teardown_mid_title_push_cleans_up_without_false_toast() {
     use streamy_core::core::teardown_state::StreamState;
     use streamy_core::session::stream_session::{StreamProfile, StreamSession};
 
-    let panel = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (panel, source) = bind_panel_and_v1();
     let panel_port = panel.local_addr().unwrap().port();
-    let source = TcpListener::bind(("127.0.0.1", panel_port + 1)).expect("bind v1 port");
 
     let src_stop = Arc::new(AtomicBool::new(false));
     let src_stop2 = src_stop.clone();

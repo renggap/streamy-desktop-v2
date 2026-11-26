@@ -236,7 +236,7 @@
 #define PACKAGE_NAME "lame"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "lame 4.0"
+#define PACKAGE_STRING "lame 4.1beta1"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "lame"
@@ -245,7 +245,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "4.0"
+#define PACKAGE_VERSION "4.1beta1"
 
 /* The size of 'double', as computed by sizeof. */
 #define SIZEOF_DOUBLE 8
@@ -400,7 +400,7 @@
 
 
 /* Version number of package */
-#define VERSION "4.0"
+#define VERSION "4.1beta1"
 
 /* Define if using the dmalloc debugging malloc package */
 /* #undef WITH_DMALLOC */
