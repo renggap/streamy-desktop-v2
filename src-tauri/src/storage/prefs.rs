@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use streamy_core::audio::denoise::NoiseSuppression;
+use streamy_core::audio::player::PlayMode;
 use streamy_core::core::audio_config_rules::AudioConfigRules;
 
 pub const MIN_GAIN: f32 = 0.0;
@@ -33,8 +34,8 @@ pub struct AppSettings {
     /// Send each playlist track's title to listeners when it starts.
     pub send_track_titles: bool,
     pub player_volume: f32,
-    pub auto_advance: bool,
-    pub repeat: bool,
+    /// What the playlist does when a track ends.
+    pub play_mode: PlayMode,
     /// RNNoise strength on the mic (never the playlist).
     pub noise_suppression: NoiseSuppression,
     /// Quality of every recording, on air or standalone (MP3, 44.1 kHz).
@@ -60,8 +61,7 @@ impl Default for AppSettings {
             monitor_playlist: true,
             send_track_titles: true,
             player_volume: 1.0,
-            auto_advance: true,
-            repeat: false,
+            play_mode: PlayMode::PlayOnce,
             noise_suppression: NoiseSuppression::Off,
             record_bitrate_kbps: 128,
             record_mono: true,
@@ -210,6 +210,14 @@ mod tests {
         assert_eq!(s.mic_gain, 2.0);
         assert!(s.auto_reconnect);
         assert_eq!(s.language, "en");
+    }
+
+    #[test]
+    fn legacy_auto_advance_and_repeat_keys_are_ignored() {
+        let s: AppSettings = serde_json::from_str(r#"{"auto_advance":true,"repeat":true}"#).unwrap();
+        assert_eq!(s.play_mode, PlayMode::PlayOnce);
+        let s: AppSettings = serde_json::from_str(r#"{"play_mode":"repeat_one"}"#).unwrap();
+        assert_eq!(s.play_mode, PlayMode::RepeatOne);
     }
 
     #[test]

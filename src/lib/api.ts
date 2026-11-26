@@ -8,6 +8,7 @@ import type {
   AudioDeviceDesc,
   InputKind,
   LevelPayload,
+  PlayMode,
   PlayerErrorPayload,
   PlayerSnapshot,
   Profile,
@@ -64,8 +65,7 @@ export const api = {
   previous: (): Promise<void> => invoke("player_previous"),
   seek: (secs: number): Promise<void> => invoke("player_seek", { secs }),
   setPlayerVolume: (volume: number): Promise<number> => invoke("player_set_volume", { volume }),
-  setPlayerOptions: (autoAdvance: boolean, repeat: boolean): Promise<void> =>
-    invoke("player_set_options", { autoAdvance, repeat }),
+  setPlayerOptions: (mode: PlayMode): Promise<void> => invoke("player_set_play_mode", { mode }),
 
   // Settings
   getSettings: (): Promise<AppSettings> => invoke("get_settings"),

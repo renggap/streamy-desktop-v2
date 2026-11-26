@@ -118,11 +118,19 @@
         <span class="w-9 text-right font-mono text-xs tabular-nums">{Math.round(p.volume * 100)}%</span>
       </label>
       <label class="switch">
-        <input type="checkbox" checked={p.auto_advance} onchange={(e) => store.setPlayerOptions(e.currentTarget.checked, p.repeat)} />
+        <input
+          type="checkbox"
+          checked={p.play_mode === "loop"}
+          onchange={(e) => store.setPlayMode(e.currentTarget.checked ? "loop" : "play_once")}
+        />
         <span></span>{t("optAutoAdvance")}
       </label>
       <label class="switch">
-        <input type="checkbox" checked={p.repeat} onchange={(e) => store.setPlayerOptions(p.auto_advance, e.currentTarget.checked)} />
+        <input
+          type="checkbox"
+          checked={p.play_mode === "repeat_one"}
+          onchange={(e) => store.setPlayMode(e.currentTarget.checked ? "repeat_one" : "play_once")}
+        />
         <span></span>{t("optRepeat")}
       </label>
       <label class="switch">

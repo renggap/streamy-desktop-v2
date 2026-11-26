@@ -10,6 +10,7 @@ import type {
   AppStatus,
   AudioDeviceDesc,
   InputKind,
+  PlayMode,
   PlayerSnapshot,
   PlayerStatus,
   Profile,
@@ -43,8 +44,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   monitor_playlist: true,
   send_track_titles: true,
   player_volume: 1,
-  auto_advance: true,
-  repeat: false,
+  play_mode: "play_once",
   noise_suppression: "off",
   record_bitrate_kbps: 128,
   record_mono: true,
@@ -57,8 +57,7 @@ const IDLE_PLAYER: PlayerStatus = {
   position_secs: 0,
   duration_secs: null,
   volume: 1,
-  auto_advance: true,
-  repeat: false,
+  play_mode: "play_once",
 };
 
 const IDLE_STATUS: AppStatus = {
@@ -498,10 +497,9 @@ class AppStore {
     }, 80);
   }
 
-  setPlayerOptions(autoAdvance: boolean, repeat: boolean) {
-    this.settings.auto_advance = autoAdvance;
-    this.settings.repeat = repeat;
-    return this.#player(() => api.setPlayerOptions(autoAdvance, repeat));
+  setPlayMode(mode: PlayMode) {
+    this.settings.play_mode = mode;
+    return this.#player(() => api.setPlayerOptions(mode));
   }
 
   // ---- settings & profiles ---------------------------------------------------

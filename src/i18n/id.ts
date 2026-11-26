@@ -23,7 +23,6 @@ export const id: Record<TranslationKey, string> = {
   statOnAir: "Mengudara",
   statSent: "Terkirim",
   statQuality: "Kualitas",
-  statDropped: "Terbuang",
   qualityValue: "{bitrate} kbps · {rate} kHz · {channels}",
   mono: "Mono",
   stereo: "Stereo",

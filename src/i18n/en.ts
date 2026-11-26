@@ -21,7 +21,6 @@ export const en = {
   statOnAir: "On air",
   statSent: "Sent",
   statQuality: "Quality",
-  statDropped: "Dropped",
   qualityValue: "{bitrate} kbps · {rate} kHz · {channels}",
   mono: "Mono",
   stereo: "Stereo",

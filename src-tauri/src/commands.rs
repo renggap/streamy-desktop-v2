@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use streamy_core::audio::decoder::SUPPORTED_EXTENSIONS;
 use streamy_core::audio::pipeline::LevelFeedFn;
-use streamy_core::audio::player::{AddResult, PlayState, PlayerEvent, PlayerStatus, PlaylistPlayer, Track};
+use streamy_core::audio::player::{AddResult, PlayMode, PlayState, PlayerEvent, PlayerStatus, PlaylistPlayer, Track};
 use streamy_core::audio::source::AudioSource;
 use streamy_core::audio::switch::{InputControl, InputKind, SwitchSource};
 use streamy_core::core::audio_config_rules::{AudioConfig, AudioConfigRules, BroadcastMode, Codec, DjProtocol};
@@ -207,7 +207,7 @@ impl AppState {
     /// Restore the queue and player options saved last time.
     pub fn restore_player(&self, settings: &AppSettings) {
         self.player.set_volume(settings.player_volume);
-        self.player.set_options(settings.auto_advance, settings.repeat);
+        self.player.set_play_mode(settings.play_mode);
         let paths: Vec<String> = std::fs::read_to_string(&self.playlist_path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -1006,14 +1006,11 @@ pub async fn player_set_volume(state: State<'_, AppState>, volume: f32) -> Resul
 }
 
 #[tauri::command]
-pub async fn player_set_options(state: State<'_, AppState>, auto_advance: bool, repeat: bool) -> Result<(), String> {
+pub async fn player_set_play_mode(state: State<'_, AppState>, mode: PlayMode) -> Result<(), String> {
     let st = state.inner().clone();
     blocking(move || {
-        st.player.set_options(auto_advance, repeat);
-        st.prefs.lock().update(|s| {
-            s.auto_advance = auto_advance;
-            s.repeat = repeat;
-        })?;
+        st.player.set_play_mode(mode);
+        st.prefs.lock().update(|s| s.play_mode = mode)?;
         Ok(())
     })
     .await

@@ -251,7 +251,7 @@ pub fn run() {
             commands::player_previous,
             commands::player_seek,
             commands::player_set_volume,
-            commands::player_set_options,
+            commands::player_set_play_mode,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

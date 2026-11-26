@@ -12,7 +12,7 @@ use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::audio::decoder::{probe_file, FileDecoder, PLAYER_CHANNELS, PLAYER_RATE};
 use crate::audio::resample::CaptureConverter;
@@ -49,6 +49,18 @@ pub enum PlayState {
     Paused,
 }
 
+/// What happens when the current track ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayMode {
+    /// Continue to the next track; stop after the last one.
+    PlayOnce,
+    /// Continue to the next track; after the last one, start again from the first.
+    Loop,
+    /// Replay the current track only.
+    RepeatOne,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayerStatus {
     pub state: PlayState,
@@ -56,8 +68,7 @@ pub struct PlayerStatus {
     pub position_secs: f64,
     pub duration_secs: Option<f64>,
     pub volume: f32,
-    pub auto_advance: bool,
-    pub repeat: bool,
+    pub play_mode: PlayMode,
 }
 
 #[derive(Debug, Clone)]
@@ -83,8 +94,7 @@ struct Inner {
     state: PlayState,
     decoder: Option<FileDecoder>,
     volume: f32,
-    auto_advance: bool,
-    repeat: bool,
+    play_mode: PlayMode,
     next_id: u64,
 }
 
@@ -112,8 +122,7 @@ impl PlaylistPlayer {
                 state: PlayState::Stopped,
                 decoder: None,
                 volume: 1.0,
-                auto_advance: true,
-                repeat: false,
+                play_mode: PlayMode::PlayOnce,
                 next_id: 1,
             }),
             taps: Mutex::new(Vec::new()),
@@ -238,8 +247,7 @@ impl PlaylistPlayer {
                 .and_then(|d| d.duration_secs())
                 .or_else(|| current.and_then(|t| t.duration_secs)),
             volume: inner.volume,
-            auto_advance: inner.auto_advance,
-            repeat: inner.repeat,
+            play_mode: inner.play_mode,
         }
     }
 
@@ -376,11 +384,10 @@ impl PlaylistPlayer {
         v
     }
 
-    pub fn set_options(&self, auto_advance: bool, repeat: bool) {
+    pub fn set_play_mode(&self, mode: PlayMode) {
         {
             let mut inner = self.inner.lock();
-            inner.auto_advance = auto_advance;
-            inner.repeat = repeat;
+            inner.play_mode = mode;
         }
         self.fire(vec![PlayerEvent::Changed]);
     }
@@ -455,22 +462,22 @@ impl PlaylistPlayer {
         inner.decoder = None;
         let len = inner.queue.len();
         let idx = inner.current.and_then(|c| inner.index_of(c));
-        if !inner.auto_advance || len == 0 {
+        if len == 0 {
             inner.state = PlayState::Stopped;
             events.push(PlayerEvent::Changed);
             return;
         }
-        let mut next = match idx {
-            Some(i) => i + 1,
-            None => 0,
+        let mut next = match (inner.play_mode, idx) {
+            (PlayMode::RepeatOne, Some(i)) => i,
+            (_, Some(i)) => i + 1,
+            (_, None) => 0,
         };
         for _ in 0..len {
             if next >= len {
-                if inner.repeat {
-                    next = 0;
-                } else {
+                if inner.play_mode != PlayMode::Loop {
                     break;
                 }
+                next = 0;
             }
             let track = inner.queue[next].clone();
             match FileDecoder::open(Path::new(&track.path)) {
@@ -605,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn plays_through_the_queue_and_stops_at_the_end() {
+    fn play_once_plays_through_the_queue_and_stops_at_the_end() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("one.wav");
         let b = dir.path().join("two.wav");
@@ -656,6 +663,71 @@ mod tests {
         player.play(None).unwrap();
         assert!(wait_for(|| peak.lock().1 > 0.1, 1_000));
         player.remove_tap(tap);
+        player.shutdown();
+    }
+
+    fn started_recorder(player: &PlaylistPlayer) -> Arc<Mutex<Vec<String>>> {
+        let started = Arc::new(Mutex::new(Vec::<String>::new()));
+        let s = started.clone();
+        player.set_event_handler(Arc::new(move |e| {
+            if let PlayerEvent::TrackStarted(t) = e {
+                s.lock().push(t.title);
+            }
+        }));
+        started
+    }
+
+    #[test]
+    fn repeat_one_replays_only_the_current_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("one.wav");
+        let b = dir.path().join("two.wav");
+        write_wav(&a, 44_100, 1, 0.2);
+        write_wav(&b, 44_100, 1, 0.2);
+        let player = PlaylistPlayer::new();
+        let added = player
+            .add_files(&[a.to_string_lossy().into(), b.to_string_lossy().into()])
+            .added;
+        let started = started_recorder(&player);
+
+        player.set_play_mode(PlayMode::RepeatOne);
+        player.play(Some(added[1].id)).unwrap();
+        assert!(wait_for(|| started.lock().len() >= 3, 3_000), "track two replays");
+        player.shutdown();
+        let titles = started.lock().clone();
+        assert!(titles.iter().all(|t| t == "two"), "never advances: {titles:?}");
+        assert!(titles.len() >= 3);
+    }
+
+    #[test]
+    fn loop_mode_wraps_back_to_the_first_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("one.wav");
+        let b = dir.path().join("two.wav");
+        write_wav(&a, 44_100, 1, 0.2);
+        write_wav(&b, 44_100, 1, 0.2);
+        let player = PlaylistPlayer::new();
+        player.add_files(&[a.to_string_lossy().into(), b.to_string_lossy().into()]);
+        let started = started_recorder(&player);
+
+        assert_eq!(player.status().play_mode, PlayMode::PlayOnce);
+        player.set_play_mode(PlayMode::Loop);
+        player.play(None).unwrap();
+        assert!(wait_for(|| started.lock().len() >= 4, 3_000), "list keeps looping");
+        player.shutdown();
+        assert_eq!(*started.lock(), ["one", "two", "one", "two"]);
+    }
+
+    #[test]
+    fn set_play_mode_is_reflected_in_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("one.wav");
+        write_wav(&a, 44_100, 1, 0.2);
+        let player = PlaylistPlayer::new();
+        player.add_files(&[a.to_string_lossy().into()]);
+        player.set_play_mode(PlayMode::Loop);
+        player.play(None).unwrap();
+        assert_eq!(player.status().play_mode, PlayMode::Loop);
         player.shutdown();
     }
 

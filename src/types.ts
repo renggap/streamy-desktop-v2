@@ -68,6 +68,8 @@ export interface RecordingStatus {
 
 export type InputKind = "mic" | "playlist";
 export type PlayState = "Stopped" | "Playing" | "Paused";
+/** What the playlist does when a track ends. */
+export type PlayMode = "play_once" | "loop" | "repeat_one";
 
 export interface Track {
   id: number;
@@ -82,8 +84,7 @@ export interface PlayerStatus {
   position_secs: number;
   duration_secs: number | null;
   volume: number;
-  auto_advance: boolean;
-  repeat: boolean;
+  play_mode: PlayMode;
 }
 
 export interface PlayerSnapshot {
@@ -127,8 +128,7 @@ export interface AppSettings {
   monitor_playlist: boolean;
   send_track_titles: boolean;
   player_volume: number;
-  auto_advance: boolean;
-  repeat: boolean;
+  play_mode: PlayMode;
   noise_suppression: NoiseSuppression;
   record_bitrate_kbps: number;
   record_mono: boolean;

@@ -141,18 +141,17 @@
       </div>
     {/if}
 
-    <dl class="relative mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <dl class="relative mt-6 grid grid-cols-2 gap-3 lg:grid-cols-3">
       {#each [
         { label: t("statSent"), value: formatBytes(stats.bytes_sent), mono: true },
         { label: t("statQuality"), value: quality, mono: false },
-        { label: t("statDropped"), value: String(stats.dropped_frames), mono: true, warn: stats.dropped_frames > 0 },
         { label: t("statServer"), value: profile ? `${profile.host}:${profile.mode === "DJ" && profile.dj_port ? profile.dj_port : profile.port}` : "—", mono: true },
       ] as stat}
         <div class="min-w-0 rounded-xl bg-gray-800/80 px-4 py-3">
           <dt class="text-[11px] font-medium text-gray-400">{stat.label}</dt>
           <dd
             class="mt-0.5 truncate font-semibold {stat.mono ? 'font-mono text-[15px] tabular-nums' : 'text-xs leading-[22px]'}
-              {stat.warn ? 'text-amber-300' : store.isStreaming ? 'text-white' : 'text-gray-400'}"
+              {store.isStreaming ? 'text-white' : 'text-gray-400'}"
             title={stat.value}
           >
             {stat.value}
