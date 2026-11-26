@@ -5,7 +5,7 @@
     | "trash" | "folder" | "refresh" | "x" | "check" | "alert" | "info" | "record"
     | "chevron-down" | "arrow-left" | "music" | "send" | "play" | "pause" | "skip-back"
     | "skip-forward" | "repeat" | "list-end" | "volume" | "headphones" | "arrow-up" | "arrow-down"
-    | "file-plus" | "layout" | "upload" | "download";
+    | "file-plus" | "layout" | "upload" | "download" | "pin";
   let { name, size = 16 }: { name: Name; size?: number } = $props();
   const FILLED = new Set<Name>(["record", "play", "pause", "skip-back", "skip-forward"]);
 
@@ -44,6 +44,7 @@
     layout: "M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z",
     download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
     upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
+    pin: "M12 17v5 M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1Z",
   };
 </script>
 

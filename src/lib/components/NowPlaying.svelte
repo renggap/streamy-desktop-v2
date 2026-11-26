@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { store } from "../store.svelte";
+  import type { SavedTitle } from "../../types";
   import { t } from "../../i18n/index.svelte";
 
   let title = $state("");
@@ -19,10 +20,22 @@
     sending = false;
   }
 
-  function useSaved(s: string) {
-    title = s;
+  function useSaved(s: SavedTitle) {
+    title = s.text;
     sending = true;
-    void store.sendTitle(s).finally(() => (sending = false));
+    void store.sendTitle(s.text).finally(() => (sending = false));
+  }
+
+  // Inline rename: the row's text becomes an input until Enter (save) or Escape (cancel).
+  let editing = $state<number | null>(null);
+  let draft = $state("");
+  function startEdit(i: number, s: SavedTitle) {
+    editing = i;
+    draft = s.text;
+  }
+  function commitEdit(oldText: string) {
+    editing = null;
+    void store.editTitle(oldText, draft);
   }
 </script>
 
@@ -61,18 +74,53 @@
       <p class="hint mt-1">{t("savedTitlesEmpty")}</p>
     {:else}
       <ul class="mt-2 flex flex-col gap-1">
-        {#each saved as s (s)}
+        {#each saved as s, i (i)}
           <li class="group flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-white">
-            <button
-              class="min-w-0 flex-1 cursor-pointer truncate py-1 text-left text-[13px] text-gray-800 disabled:opacity-60"
-              onclick={() => useSaved(s)}
-              disabled={sending}
-              title={t("btnUseTitle")}
-            >{s}</button>
+            {#if editing === i}
+              <input
+                class="input min-w-0 flex-1 py-1 text-[13px]"
+                bind:value={draft}
+                maxlength="200"
+                aria-label={t("btnEditTitle")}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") commitEdit(s.text);
+                  if (e.key === "Escape") editing = null;
+                }}
+                onblur={() => editing === i && commitEdit(s.text)}
+              />
+              <button
+                class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg text-gray-400 hover:bg-gray-900 hover:text-white"
+                onmousedown={(e) => e.preventDefault()}
+                onclick={() => commitEdit(s.text)}
+                aria-label={t("btnSaveTitle")}
+                title={t("btnSaveTitle")}
+              ><Icon name="check" size={14} /></button>
+            {:else}
+              <button
+                class="min-w-0 flex-1 cursor-pointer truncate py-1 text-left text-[13px] text-gray-800 disabled:opacity-60"
+                onclick={() => useSaved(s)}
+                disabled={sending}
+                title={t("btnUseTitle")}
+              >{s.text}</button>
+              <button
+                class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg hover:bg-gray-900 hover:text-white
+                  {s.pinned ? 'text-lime-600' : 'text-gray-400'}"
+                onclick={() => store.togglePin(s.text)}
+                aria-pressed={s.pinned}
+                aria-label={s.pinned ? t("btnUnpinTitle") : t("btnPinTitle")}
+                title={s.pinned ? t("btnUnpinTitle") : t("btnPinTitle")}
+              ><Icon name="pin" size={14} /></button>
+              <button
+                class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg text-gray-400 hover:bg-gray-900 hover:text-white"
+                onclick={() => startEdit(i, s)}
+                aria-label={`${t("btnEditTitle")}: ${s.text}`}
+                title={t("btnEditTitle")}
+              ><Icon name="pencil" size={14} /></button>
+            {/if}
             <button
               class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg text-gray-400 hover:bg-red-500/10 hover:text-red-600"
-              onclick={() => store.removeTitle(s)}
-              aria-label={`${t("btnRemoveTitle")}: ${s}`}
+              onclick={() => store.removeTitle(s.text)}
+              aria-label={`${t("btnRemoveTitle")}: ${s.text}`}
               title={t("btnRemoveTitle")}
             ><Icon name="x" size={14} /></button>
           </li>

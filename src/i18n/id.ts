@@ -62,11 +62,15 @@ export const id: Record<TranslationKey, string> = {
   toastTitleFailed: "Gagal memperbarui judul di server.",
   toastTitleQueued: "Judul disimpan. Akan dikirim saat mengudara.",
   savedTitlesTitle: "Judul tersimpan",
-  savedTitlesHint: "Maksimal 10. Klik satu untuk mengirimnya seketika.",
+  savedTitlesHint: "Maksimal 10. Klik satu untuk mengirimnya seketika. Judul yang disematkan tidak akan diganti.",
   savedTitlesEmpty: "Judul yang Anda kirim disimpan di sini untuk dipakai lagi dengan satu klik.",
   btnUseTitle: "Kirim judul ini",
   btnRemoveTitle: "Hapus judul tersimpan",
-  toastTitleLimit: "Judul tersimpan dibatasi 10. Judul terlama diganti.",
+  btnPinTitle: "Sematkan judul",
+  btnUnpinTitle: "Lepas sematan judul",
+  btnEditTitle: "Edit judul",
+  btnSaveTitle: "Simpan judul",
+  toastTitleLimit: "Judul tersimpan dibatasi 10. Judul terlama yang tidak disematkan diganti.",
 
   // Recording
   recordTitle: "Rekaman",

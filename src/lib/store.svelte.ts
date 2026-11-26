@@ -14,6 +14,7 @@ import type {
   PlayerSnapshot,
   PlayerStatus,
   Profile,
+  SavedTitle,
   Track,
   UpdateStatus,
 } from "../types";
@@ -21,6 +22,17 @@ import type {
 const POLL_MS = 1000;
 const SILENCE_DB = -90;
 const MAX_SAVED_TITLES = 10;
+
+/** Mirrors Rust `tidy_titles`: newest first, over the cap drop the oldest unpinned; all pinned, the newcomer loses. */
+function capTitles(list: SavedTitle[]): SavedTitle[] {
+  let out = list.filter((s, i) => s.text && list.findIndex((o) => o.text === s.text) === i);
+  while (out.length > MAX_SAVED_TITLES) {
+    const i = out.findLastIndex((s) => !s.pinned);
+    if (i === -1) return out.slice(0, MAX_SAVED_TITLES);
+    out = out.filter((_, j) => j !== i);
+  }
+  return out;
+}
 
 export type ToastKind = "info" | "success" | "error";
 export interface Toast {
@@ -327,22 +339,40 @@ class AppStore {
     }
   }
 
-  /** Send `title` now and keep it as a preset (newest first, max 10). */
+  /** Send `title` now and keep it as a preset (newest first, max 10, pinned never evicted). */
   async sendTitle(title: string): Promise<boolean> {
     const text = title.trim();
     if (!text) return false;
     const ok = await this.updateNowPlaying(text);
     if (ok) {
       const before = this.settings.saved_titles;
-      const next = [text, ...before.filter((s) => s !== text)].slice(0, MAX_SAVED_TITLES);
-      if (next.length < before.length + (before.includes(text) ? 0 : 1)) this.toastKey("info", "toastTitleLimit");
+      const kept = before.filter((s) => s.text !== text);
+      const next = capTitles([{ text, pinned: before.find((s) => s.text === text)?.pinned ?? false }, ...kept]);
+      if (next.length < before.length + (before.some((s) => s.text === text) ? 0 : 1)) this.toastKey("info", "toastTitleLimit");
       void this.saveSettings({ saved_titles: next }, true);
     }
     return ok;
   }
 
-  removeTitle(title: string) {
-    return this.saveSettings({ saved_titles: this.settings.saved_titles.filter((s) => s !== title) }, true);
+  togglePin(text: string) {
+    return this.saveSettings(
+      { saved_titles: this.settings.saved_titles.map((s) => (s.text === text ? { ...s, pinned: !s.pinned } : s)) },
+      true,
+    );
+  }
+
+  /** Rename a saved title in place. Empty or duplicate names are rejected by the backend tidy. */
+  editTitle(oldText: string, newText: string) {
+    const text = newText.trim().slice(0, 200);
+    if (!text || text === oldText) return Promise.resolve(true);
+    return this.saveSettings(
+      { saved_titles: this.settings.saved_titles.map((s) => (s.text === oldText ? { ...s, text } : s)) },
+      true,
+    );
+  }
+
+  removeTitle(text: string) {
+    return this.saveSettings({ saved_titles: this.settings.saved_titles.filter((s) => s.text !== text) }, true);
   }
 
   /** One now-playing push finished: toast from the server's real answer. */

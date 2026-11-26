@@ -12,6 +12,37 @@ pub const MIN_GAIN: f32 = 0.0;
 pub const MAX_GAIN: f32 = 4.0;
 pub const MAX_SAVED_TITLES: usize = 10;
 
+/// One saved now-playing title. Pinned entries are never evicted by newer ones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedTitle {
+    pub text: String,
+    pub pinned: bool,
+}
+
+impl Default for SavedTitle {
+    fn default() -> Self {
+        Self { text: String::new(), pinned: false }
+    }
+}
+
+/// Accepts the pre-2.5 plain-string form so old settings files keep loading.
+fn deserialize_saved_titles<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<SavedTitle>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Item {
+        Full(SavedTitle),
+        Legacy(String),
+    }
+    Ok(Vec::<Item>::deserialize(d)?
+        .into_iter()
+        .map(|i| match i {
+            Item::Full(t) => t,
+            Item::Legacy(text) => SavedTitle { text, pinned: false },
+        })
+        .collect())
+}
+
 /// Single source of truth for app settings, shared verbatim with the UI.
 /// `serde(default)` lets older/partial files (and older UIs) load without
 /// wiping everything back to defaults.
@@ -42,7 +73,8 @@ pub struct AppSettings {
     pub record_bitrate_kbps: u32,
     pub record_mono: bool,
     /// Saved now-playing titles, newest first. Hard cap: [`MAX_SAVED_TITLES`].
-    pub saved_titles: Vec<String>,
+    #[serde(deserialize_with = "deserialize_saved_titles")]
+    pub saved_titles: Vec<SavedTitle>,
 }
 
 impl Default for AppSettings {
@@ -98,16 +130,29 @@ impl AppSettings {
     }
 
     /// Trim, drop empties and duplicates (first wins), cap at [`MAX_SAVED_TITLES`].
-    pub fn tidy_titles(titles: Vec<String>) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for t in titles {
-            let t = t.trim().chars().take(200).collect::<String>();
-            if t.is_empty() || out.iter().any(|s| s == &t) {
+    /// Over the cap the oldest *unpinned* entries go first; pinned ones stay.
+    pub fn tidy_titles(titles: Vec<SavedTitle>) -> Vec<SavedTitle> {
+        let mut out: Vec<SavedTitle> = Vec::new();
+        for mut t in titles {
+            t.text = t.text.trim().chars().take(200).collect();
+            if t.text.is_empty() || out.iter().any(|s| s.text == t.text) {
                 continue;
             }
             out.push(t);
-            if out.len() == MAX_SAVED_TITLES {
-                break;
+        }
+        // Over the cap: drop from the end (= oldest) while an unpinned entry is left.
+        // All pinned: the newest extras at the front lose instead.
+        let mut excess = out.len().saturating_sub(MAX_SAVED_TITLES);
+        while excess > 0 {
+            match out.iter().rposition(|s| !s.pinned) {
+                Some(i) => {
+                    out.remove(i);
+                    excess -= 1;
+                }
+                None => {
+                    out.drain(..excess);
+                    excess = 0;
+                }
             }
         }
         out
@@ -236,16 +281,61 @@ mod tests {
 
     #[test]
     fn sanitize_tidy_saved_titles() {
-        let titles: Vec<String> = (0..15).map(|i| format!("t{i}")).collect();
+        let titles: Vec<SavedTitle> = (0..15).map(|i| SavedTitle { text: format!("t{i}"), pinned: false }).collect();
         let s = AppSettings { saved_titles: titles, ..Default::default() }.sanitized();
         assert_eq!(s.saved_titles.len(), MAX_SAVED_TITLES);
-        assert_eq!(s.saved_titles[0], "t0");
+        assert_eq!(s.saved_titles[0].text, "t0");
+        assert_eq!(s.saved_titles[9].text, "t9");
 
         let s = AppSettings {
-            saved_titles: vec!["  ".into(), "a".into(), "a".into(), " b ".into()],
+            saved_titles: vec![
+                SavedTitle { text: "  ".into(), pinned: false },
+                SavedTitle { text: "a".into(), pinned: true },
+                SavedTitle { text: "a".into(), pinned: false },
+                SavedTitle { text: " b ".into(), pinned: false },
+            ],
             ..Default::default()
         }
         .sanitized();
-        assert_eq!(s.saved_titles, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            s.saved_titles,
+            vec![
+                SavedTitle { text: "a".into(), pinned: true },
+                SavedTitle { text: "b".into(), pinned: false },
+            ]
+        );
+    }
+
+    fn title(text: &str, pinned: bool) -> SavedTitle {
+        SavedTitle { text: text.into(), pinned }
+    }
+
+    #[test]
+    fn pinned_titles_survive_a_full_list() {
+        // 10 saved, two pinned. Sending 3 new ones evicts only unpinned (oldest first).
+        let mut titles: Vec<SavedTitle> = (0..10).map(|i| title(&format!("t{i}"), i == 3 || i == 7)).collect();
+        titles.insert(0, title("new1", false));
+        titles.insert(0, title("new2", false));
+        titles.insert(0, title("new3", false));
+        let s = AppSettings { saved_titles: titles, ..Default::default() }.sanitized();
+        let texts: Vec<&str> = s.saved_titles.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, ["new3", "new2", "new1", "t0", "t1", "t2", "t3", "t4", "t5", "t7"]);
+    }
+
+    #[test]
+    fn all_pinned_list_rejects_newcomers() {
+        let titles: Vec<SavedTitle> = (0..10).map(|i| title(&format!("t{i}"), true)).collect();
+        let mut with_new = titles.clone();
+        with_new.insert(0, title("new", false));
+        let s = AppSettings { saved_titles: with_new, ..Default::default() }.sanitized();
+        assert_eq!(s.saved_titles, titles);
+    }
+
+    #[test]
+    fn legacy_string_titles_load_unpinned() {
+        let s: AppSettings = serde_json::from_str(r#"{"saved_titles":["a","b"]}"#).unwrap();
+        assert_eq!(s.saved_titles, vec![title("a", false), title("b", false)]);
+        let s: AppSettings = serde_json::from_str(r#"{"saved_titles":[{"text":"a"},{"text":"b","pinned":true}]}"#).unwrap();
+        assert_eq!(s.saved_titles, vec![title("a", false), title("b", true)]);
     }
 }

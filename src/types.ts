@@ -70,6 +70,11 @@ export type InputKind = "mic" | "playlist";
 export type PlayState = "Stopped" | "Playing" | "Paused";
 /** What the playlist does when a track ends. */
 export type PlayMode = "play_once" | "loop" | "repeat_one";
+/** One saved now-playing title. Pinned ones are never evicted by newer ones. */
+export interface SavedTitle {
+  text: string;
+  pinned: boolean;
+}
 
 export interface Track {
   id: number;
@@ -132,7 +137,7 @@ export interface AppSettings {
   noise_suppression: NoiseSuppression;
   record_bitrate_kbps: number;
   record_mono: boolean;
-  saved_titles: string[];
+  saved_titles: SavedTitle[];
 }
 
 export type NoiseSuppression = "off" | "low" | "medium" | "high";
