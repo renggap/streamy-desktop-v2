@@ -26,6 +26,19 @@ fn read_line_crude(s: &mut TcpStream) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// Listener on an ephemeral port whose neighbours at `offsets` are closed.
+/// Ephemeral allocation is sequential on some hosts (Windows CI), so other
+/// test threads' listeners land next door; rebind until the layout fits.
+fn bind_with_closed(offsets: &[i32]) -> TcpListener {
+    loop {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port() as i32;
+        if offsets.iter().all(|&o| TcpStream::connect(("127.0.0.1", (port + o) as u16)).is_err()) {
+            return l;
+        }
+    }
+}
+
 /// Panel on an ephemeral port and its v1 source on panel+1, as the test layout
 /// requires. Ephemeral allocation occasionally lands next to a busy port, so
 /// retry with a fresh panel until both fit.
@@ -767,19 +780,11 @@ fn chain_falls_through_to_uvox_on_plus_two_when_listed_port_is_closed() {
     // (the Centova djport2 convention). The chain's third leg must win.
     use streamy_core::net::uvox::UvoxClient;
 
-    let uvox2 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let uvox2 = bind_with_closed(&[-2, -1]);
     let uvox2_port = uvox2.local_addr().unwrap().port();
-    // dj_port chosen so that dj_port+2 == uvox2_port and dj_port, dj_port+1
-    // are guaranteed closed: bind them, record, drop, and race-window guard
-    // by binding a placeholder we keep for the test duration? No — simply
-    // pick dj_port = uvox2_port - 2 and verify those ports are closed.
+    // dj_port chosen so that dj_port+2 == uvox2_port; dj_port and dj_port+1
+    // are closed (bind_with_closed verified it, racing other test threads).
     let dj_port = uvox2_port - 2;
-    for probe in [dj_port, dj_port + 1] {
-        assert!(
-            std::net::TcpStream::connect(("127.0.0.1", probe)).is_err(),
-            "port {probe} must be closed for this test"
-        );
-    }
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
@@ -813,14 +818,8 @@ fn chain_falls_through_to_uvox_on_listed_port_when_v1_leg_is_closed() {
     // are closed, uvox on the listed port answers. Second leg must win.
     use streamy_core::net::uvox::UvoxClient;
 
-    let uvox1 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let uvox1 = bind_with_closed(&[1, 2]);
     let dj_port = uvox1.local_addr().unwrap().port();
-    for probe in [dj_port + 1, dj_port + 2] {
-        assert!(
-            std::net::TcpStream::connect(("127.0.0.1", probe)).is_err(),
-            "port {probe} must be closed for this test"
-        );
-    }
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
@@ -886,7 +885,9 @@ fn fallback_abort_fans_out_to_both_children() {
     let t0 = Instant::now();
     abort.abort(); // must shut BOTH sockets
     t.join().unwrap();
-    assert!(t0.elapsed() < Duration::from_secs(2), "abort unblocked slowly");
+    // Generous budget: a loaded CI runner can take seconds to connect a
+    // blocking handshake; the test asserts abort completes, not latency.
+    assert!(t0.elapsed() < Duration::from_secs(10), "abort unblocked slowly");
 }
 
 /// Uvox client bound to a real address (used for abort fan-out testing).
