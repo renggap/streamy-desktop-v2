@@ -132,6 +132,7 @@ export interface AppSettings {
   noise_suppression: NoiseSuppression;
   record_bitrate_kbps: number;
   record_mono: boolean;
+  saved_titles: string[];
 }
 
 export type NoiseSuppression = "off" | "low" | "medium" | "high";

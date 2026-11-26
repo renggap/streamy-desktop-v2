@@ -19,6 +19,7 @@ import type {
 
 const POLL_MS = 1000;
 const SILENCE_DB = -90;
+const MAX_SAVED_TITLES = 10;
 
 export type ToastKind = "info" | "success" | "error";
 export interface Toast {
@@ -47,6 +48,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   noise_suppression: "off",
   record_bitrate_kbps: 128,
   record_mono: true,
+  saved_titles: [],
 };
 
 const IDLE_PLAYER: PlayerStatus = {
@@ -324,6 +326,24 @@ class AppStore {
       this.toastError(e);
       return false;
     }
+  }
+
+  /** Send `title` now and keep it as a preset (newest first, max 10). */
+  async sendTitle(title: string): Promise<boolean> {
+    const text = title.trim();
+    if (!text) return false;
+    const ok = await this.updateNowPlaying(text);
+    if (ok) {
+      const before = this.settings.saved_titles;
+      const next = [text, ...before.filter((s) => s !== text)].slice(0, MAX_SAVED_TITLES);
+      if (next.length < before.length + (before.includes(text) ? 0 : 1)) this.toastKey("info", "toastTitleLimit");
+      void this.saveSettings({ saved_titles: next }, true);
+    }
+    return ok;
+  }
+
+  removeTitle(title: string) {
+    return this.saveSettings({ saved_titles: this.settings.saved_titles.filter((s) => s !== title) }, true);
   }
 
   /** One now-playing push finished: toast from the server's real answer. */

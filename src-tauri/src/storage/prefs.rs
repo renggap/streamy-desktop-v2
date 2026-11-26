@@ -9,6 +9,7 @@ use streamy_core::core::audio_config_rules::AudioConfigRules;
 
 pub const MIN_GAIN: f32 = 0.0;
 pub const MAX_GAIN: f32 = 4.0;
+pub const MAX_SAVED_TITLES: usize = 10;
 
 /// Single source of truth for app settings, shared verbatim with the UI.
 /// `serde(default)` lets older/partial files (and older UIs) load without
@@ -39,6 +40,8 @@ pub struct AppSettings {
     /// Quality of every recording, on air or standalone (MP3, 44.1 kHz).
     pub record_bitrate_kbps: u32,
     pub record_mono: bool,
+    /// Saved now-playing titles, newest first. Hard cap: [`MAX_SAVED_TITLES`].
+    pub saved_titles: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -62,6 +65,7 @@ impl Default for AppSettings {
             noise_suppression: NoiseSuppression::Off,
             record_bitrate_kbps: 128,
             record_mono: true,
+            saved_titles: Vec::new(),
         }
     }
 }
@@ -89,7 +93,24 @@ impl AppSettings {
         }
         self.player_volume = self.player_volume.clamp(0.0, 1.0);
         self.record_bitrate_kbps = AudioConfigRules::record_config(self.record_bitrate_kbps, self.record_mono).bitrate_kbps;
+        self.saved_titles = Self::tidy_titles(self.saved_titles);
         self
+    }
+
+    /// Trim, drop empties and duplicates (first wins), cap at [`MAX_SAVED_TITLES`].
+    pub fn tidy_titles(titles: Vec<String>) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for t in titles {
+            let t = t.trim().chars().take(200).collect::<String>();
+            if t.is_empty() || out.iter().any(|s| s == &t) {
+                continue;
+            }
+            out.push(t);
+            if out.len() == MAX_SAVED_TITLES {
+                break;
+            }
+        }
+        out
     }
 }
 
@@ -203,5 +224,20 @@ mod tests {
         assert_eq!(s.mic_gain, MAX_GAIN);
         assert_eq!(s.language, "en");
         assert_eq!(s.input_device_name, None);
+    }
+
+    #[test]
+    fn sanitize_tidy_saved_titles() {
+        let titles: Vec<String> = (0..15).map(|i| format!("t{i}")).collect();
+        let s = AppSettings { saved_titles: titles, ..Default::default() }.sanitized();
+        assert_eq!(s.saved_titles.len(), MAX_SAVED_TITLES);
+        assert_eq!(s.saved_titles[0], "t0");
+
+        let s = AppSettings {
+            saved_titles: vec!["  ".into(), "a".into(), "a".into(), " b ".into()],
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(s.saved_titles, vec!["a".to_string(), "b".to_string()]);
     }
 }

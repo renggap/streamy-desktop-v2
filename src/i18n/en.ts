@@ -60,6 +60,12 @@ export const en = {
   toastTitleSent: "Title updated for listeners.",
   toastTitleFailed: "Couldn't update the title on the server.",
   toastTitleQueued: "Title saved. It will be sent when you go live.",
+  savedTitlesTitle: "Saved titles",
+  savedTitlesHint: "Up to 10. Click one to send it instantly.",
+  savedTitlesEmpty: "Titles you send are kept here for one-click reuse.",
+  btnUseTitle: "Send this title",
+  btnRemoveTitle: "Remove saved title",
+  toastTitleLimit: "Saved titles are limited to 10. The oldest was replaced.",
 
   // Recording
   recordTitle: "Recording",

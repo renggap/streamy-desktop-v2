@@ -8,14 +8,21 @@
 
   const current = $derived(store.status.stats.now_playing);
   const live = $derived(store.streamType === "Live");
+  const saved = $derived(store.settings.saved_titles);
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
-    const text = title.trim();
-    if (!text || sending) return;
+    if (!title.trim() || sending) return;
+    // Title text stays after sending: the user often sends the same title again.
     sending = true;
-    if (await store.updateNowPlaying(text)) title = "";
+    await store.sendTitle(title);
     sending = false;
+  }
+
+  function useSaved(s: string) {
+    title = s;
+    sending = true;
+    void store.sendTitle(s).finally(() => (sending = false));
   }
 </script>
 
@@ -43,4 +50,34 @@
       {live ? t("nowPlayingCurrent", { title: current }) : t("nowPlayingQueued", { title: current })}
     </p>
   {/if}
+
+  <!-- Saved titles: one click sends; x removes. -->
+  <div class="rounded-xl border border-gray-200 bg-gray-50 p-3">
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-xs font-medium text-gray-700">{t("savedTitlesTitle")}</span>
+      <span class="text-[11px] text-gray-400">{saved.length}/10</span>
+    </div>
+    {#if saved.length === 0}
+      <p class="hint mt-1">{t("savedTitlesEmpty")}</p>
+    {:else}
+      <ul class="mt-2 flex flex-col gap-1">
+        {#each saved as s (s)}
+          <li class="group flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-white">
+            <button
+              class="min-w-0 flex-1 cursor-pointer truncate py-1 text-left text-[13px] text-gray-800 disabled:opacity-60"
+              onclick={() => useSaved(s)}
+              disabled={sending}
+              title={t("btnUseTitle")}
+            >{s}</button>
+            <button
+              class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg text-gray-400 hover:bg-red-500/10 hover:text-red-600"
+              onclick={() => store.removeTitle(s)}
+              aria-label={`${t("btnRemoveTitle")}: ${s}`}
+              title={t("btnRemoveTitle")}
+            ><Icon name="x" size={14} /></button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </section>
