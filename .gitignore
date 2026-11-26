@@ -36,3 +36,4 @@ Thumbs.db
 
 # Upstream source drops (LAME tarballs); extract into crates/streamy-lame/vendor instead
 lame-*.tar.gz
+dist-release/
