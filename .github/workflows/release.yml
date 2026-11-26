@@ -6,6 +6,7 @@ name: Release
 on:
   push:
     tags: [ "v*" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -76,3 +77,53 @@ jobs:
           # Signed updater bundles only here: the key exists only as a release secret,
           # so ordinary builds (CI, local) leave them off.
           args: --config '{"bundle":{"createUpdaterArtifacts":true}}'
+
+  store-installer:
+    # Microsoft Store package: same NSIS installer but perMachine (Add/Remove
+    # Programs entry in HKLM, where the Store validator looks) and no updater
+    # signature. Manual run: upload the artifact to the `store` branch under
+    # download/<version>/ and use the Pages URL as the Store Package URL.
+    if: github.event_name == 'workflow_dispatch'
+    name: Build Windows installer for Microsoft Store
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup MSVC Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Vendored LAME DLL (MSVC)
+        shell: pwsh
+        run: |
+          ./scripts/build-lame-dll.ps1
+          if (-not (Test-Path "src-tauri\windows\libmp3lame.dll")) {
+            Copy-Item "target\lame-dist\libmp3lame.dll" "src-tauri\windows\libmp3lame.dll" -Force
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Tauri Desktop Installer (NSIS, Store config)
+        run: npm run tauri build -- --config src-tauri/tauri.store.conf.json
+
+      - name: Upload Store Installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: streamy-desktop-windows-x64-store
+          path: |
+            **/bundle/nsis/*-setup.exe
+            **/bundle/nsis/*.sig
