@@ -60,10 +60,13 @@
           <div class="flex min-w-0 flex-col gap-5">
             <OnAirHero onservers={() => go("servers")} onaddserver={() => go("servers", true)} />
             <SourceSwitch />
-            <PlaylistPanel />
+            {#if store.input === "mic"}
+              <AudioPanel />
+            {:else}
+              <PlaylistPanel />
+            {/if}
           </div>
           <div class="flex min-w-0 flex-col gap-5">
-            <AudioPanel />
             <NowPlaying />
             <RecordPanel />
           </div>

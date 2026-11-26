@@ -103,8 +103,8 @@
                 title={t("btnUseTitle")}
               >{s.text}</button>
               <button
-                class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg hover:bg-gray-900 hover:text-white
-                  {s.pinned ? 'text-lime-600' : 'text-gray-400'}"
+                class="grid size-7 flex-none cursor-pointer place-items-center rounded-lg
+                  {s.pinned ? 'bg-lime-300 text-gray-900 hover:bg-gray-900 hover:text-lime-300' : 'text-gray-400 hover:bg-gray-900 hover:text-white'}"
                 onclick={() => store.togglePin(s.text)}
                 aria-pressed={s.pinned}
                 aria-label={s.pinned ? t("btnUnpinTitle") : t("btnPinTitle")}

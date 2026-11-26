@@ -155,6 +155,8 @@ impl AppSettings {
                 }
             }
         }
+        // Pinned first; newest-first is kept inside each group (stable sort on a newest-first list).
+        out.sort_by_key(|s| !s.pinned);
         out
     }
 }
@@ -319,7 +321,7 @@ mod tests {
         titles.insert(0, title("new3", false));
         let s = AppSettings { saved_titles: titles, ..Default::default() }.sanitized();
         let texts: Vec<&str> = s.saved_titles.iter().map(|t| t.text.as_str()).collect();
-        assert_eq!(texts, ["new3", "new2", "new1", "t0", "t1", "t2", "t3", "t4", "t5", "t7"]);
+        assert_eq!(texts, ["t3", "t7", "new3", "new2", "new1", "t0", "t1", "t2", "t4", "t5"]);
     }
 
     #[test]

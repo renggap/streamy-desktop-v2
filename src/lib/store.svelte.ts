@@ -23,7 +23,7 @@ const POLL_MS = 1000;
 const SILENCE_DB = -90;
 const MAX_SAVED_TITLES = 10;
 
-/** Mirrors Rust `tidy_titles`: newest first, over the cap drop the oldest unpinned; all pinned, the newcomer loses. */
+/** Mirrors Rust `tidy_titles`: newest first, over the cap drop the oldest unpinned; all pinned, the newcomer loses. Pinned float to the top. */
 function capTitles(list: SavedTitle[]): SavedTitle[] {
   let out = list.filter((s, i) => s.text && list.findIndex((o) => o.text === s.text) === i);
   while (out.length > MAX_SAVED_TITLES) {
@@ -31,7 +31,7 @@ function capTitles(list: SavedTitle[]): SavedTitle[] {
     if (i === -1) return out.slice(0, MAX_SAVED_TITLES);
     out = out.filter((_, j) => j !== i);
   }
-  return out;
+  return out.sort((a, b) => Number(b.pinned) - Number(a.pinned));
 }
 
 export type ToastKind = "info" | "success" | "error";
@@ -356,7 +356,7 @@ class AppStore {
 
   togglePin(text: string) {
     return this.saveSettings(
-      { saved_titles: this.settings.saved_titles.map((s) => (s.text === text ? { ...s, pinned: !s.pinned } : s)) },
+      { saved_titles: capTitles(this.settings.saved_titles.map((s) => (s.text === text ? { ...s, pinned: !s.pinned } : s))) },
       true,
     );
   }
