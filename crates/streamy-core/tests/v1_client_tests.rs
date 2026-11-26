@@ -1294,7 +1294,15 @@ fn fallback_stays_sticky_on_its_protocol_across_a_real_drop() {
             let mut audio = [0u8; 64];
             let _ = s.read(&mut audio);
             served += 1;
-            // first connection ends here (drop); second stays open till test end
+            // First connection ends here (drop). Second stays open till the
+            // test ends: park on the socket until the client goes away, so the
+            // test's post-reconnect send never races a server-side close.
+            if served == 2 {
+                let _ = s.set_read_timeout(None);
+                let mut sink = [0u8; 64];
+                while s.read(&mut sink).map(|n| n > 0).unwrap_or(false) {}
+                break;
+            }
         }
     });
     // A live Ultravox server that must NEVER be contacted (sticky proof).
